@@ -24,13 +24,13 @@ const mono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'CrowdVision — Real-Time People Counting & Queue Intelligence',
+  title: 'Storefront Engagement Analyzer',
   description:
-    'Upload any CCTV video and get AI-powered people counting, queue length estimation, dwell time analytics, and overcrowding alerts — in seconds.',
-  keywords: ['people counting', 'queue management', 'crowd analytics', 'retail AI', 'YOLOv8'],
+    'Upload a prerecorded storefront video and measure how long people stay in front of the shop, with configurable engagement thresholds.',
+  keywords: ['storefront analytics', 'dwell time', 'visitor engagement', 'retail AI', 'YOLOv8'],
   openGraph: {
-    title: 'CrowdVision',
-    description: 'AI-powered crowd intelligence for retail, events & healthcare.',
+    title: 'Storefront Engagement Analyzer',
+    description: 'Dwell-time based potential engagement analysis for retail storefronts.',
     type: 'website',
   },
 };

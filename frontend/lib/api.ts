@@ -3,6 +3,18 @@
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
+export interface Zone { x1: number; y1: number; x2: number; y2: number }  // ratios 0–1
+
+export type Category = 'not_flagged' | 'potential' | 'strong';
+
+export interface Visit {
+  track_id: number;
+  entry_sec: number;
+  exit_sec: number;
+  dwell_sec: number;
+  category: Category;        // classified with the thresholds used at processing time
+}
+
 export interface AnalysisResult {
   job_id: string;
   status: 'queued' | 'processing' | 'done' | 'error';
@@ -12,45 +24,24 @@ export interface AnalysisResult {
   fps: number;
   // Final results (available when status === 'done')
   stats?: {
-    total_in: number;
-    total_out: number;
-    peak_occupancy: number;
-    avg_dwell_sec: number | null;
-    total_alerts: number;
     duration_sec: number;
     resolution: string;
     source_fps: number;
+    total_frames: number;
+    engage_sec: number;
+    strong_sec: number;
   };
-  zones?: Array<{
-    name: string;
-    type: 'queue' | 'general';
-    current_count: number;
-    max_count: number;
-    alert_threshold: number;
-  }>;
-  alerts?: Array<{
-    timestamp: string;
-    zone: string;
-    type: string;
-    level: string;
-    value: number;
-    threshold: number;
-  }>;
-  frame_stats_url?: string;   // CSV download URL
-  events_url?: string;
-  dwell_url?: string;
+  visits?: Visit[];
+  visits_url?: string;        // CSV download URL
   annotated_video_url?: string;
-  heatmap_url?: string;
   // Live frame (base64 JPEG) during processing
   preview_frame?: string;
   frame_data?: {
-    live_count: number;
-    count_in: number;
-    count_out: number;
-    occupancy: number;
-    entry_rate: number;
-    avg_dwell: number | null;
-    zone_counts: Record<string, number>;
+    time_sec: number;
+    in_zone_now: number;
+    visits: number;
+    potential: number;
+    strong: number;
     fps: number;
   };
   error?: string;
@@ -60,31 +51,21 @@ export interface AnalysisResult {
 export async function uploadVideo(
   file: File,
   config: {
+    zone: Zone;
     confidence?: number;
-    overcrowd_thresh?: number;
-    queue_thresh?: number;
-    sustained_sec?: number;
-    line_position?: number;
-    // Email alert fields
-    email_enabled?: boolean;
-    email_from?: string;
-    email_password?: string;
-    email_to?: string;
-  } = {}
+    engage_sec?: number;
+    strong_sec?: number;
+    grace_sec?: number;
+  }
 ): Promise<{ job_id: string }> {
   const form = new FormData();
   form.append('video', file);
   form.append('config', JSON.stringify({
-    confidence:       config.confidence       ?? 0.40,
-    overcrowd_thresh: config.overcrowd_thresh ?? 10,
-    queue_thresh:     config.queue_thresh     ?? 6,
-    sustained_sec:    config.sustained_sec    ?? 30,
-    line_position:    config.line_position    ?? 0.72,
-    // Email config — send these so backend can fire alerts
-    email_enabled:  config.email_enabled  ?? false,
-    email_from:     config.email_from     ?? '',
-    email_password: config.email_password ?? '',
-    email_to:       config.email_to       ?? '',
+    zone:       config.zone,
+    confidence: config.confidence ?? 0.40,
+    engage_sec: config.engage_sec ?? 5,
+    strong_sec: config.strong_sec ?? 10,
+    grace_sec:  config.grace_sec  ?? 1.5,
   }));
 
   const res = await fetch(`${BACKEND}/api/analyze`, {
@@ -153,6 +134,6 @@ export async function checkBackendHealth(): Promise<boolean> {
 }
 
 /* ── Download helpers ─────────────────────────────────────── */
-export function getDownloadUrl(jobId: string, file: 'video' | 'heatmap' | 'csv' | 'zip'): string {
+export function getDownloadUrl(jobId: string, file: 'video' | 'csv' | 'zip'): string {
   return `${BACKEND}/api/download/${jobId}/${file}`;
 }

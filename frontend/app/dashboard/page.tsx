@@ -5,17 +5,16 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Eye, Upload, Settings2, Play, AlertTriangle, CheckCircle2,
   Loader2, Sliders, X, Wifi, WifiOff, Download,
-  BarChart3, Activity, Users, Clock, Camera, Zap,
-  ChevronRight, Film, FileText, Image as ImageIcon,
+  Activity, Users, Clock, Camera, Zap,
+  ChevronRight, Film,
 } from 'lucide-react';
-import { uploadVideo, streamJobUpdates, checkBackendHealth, getDownloadUrl, type AnalysisResult } from '@/lib/api';
-import { StatsPanel } from '@/components/StatsPanel';
-import { LiveChart } from '@/components/LiveChart';
+import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult, type Zone } from '@/lib/api';
+import { ZoneSelector } from '@/components/ZoneSelector';
+import { EngagementResults } from '@/components/EngagementResults';
 import clsx from 'clsx';
 
 /* ── Inline video player with error handling ─────────────────
    The annotated MP4 is served from FastAPI at localhost:8000.
-   crossOrigin="use-credentials" is NOT needed for same-device.
    We handle load errors gracefully with a fallback UI.
    ─────────────────────────────────────────────────────────── */
 function VideoPlayerInline({ src }: { src: string }) {
@@ -70,13 +69,18 @@ function VideoPlayerInline({ src }: { src: string }) {
 
 
 /* ── Settings slider panel ────────────────────────────────── */
+type Settings = { confidence: number; engage_sec: number; strong_sec: number; grace_sec: number };
+
 function SettingsPanel({ config, onChange, onClose }: {
-  config: Record<string, number>;
-  onChange: (k: string, v: number) => void;
+  config: Settings;
+  onChange: (k: keyof Settings, v: number) => void;
   onClose: () => void;
 }) {
-  const sliders = [
-    { key: 'confidence',       label: 'Detection Confidence',       min: 0.2, max: 0.9, step: 0.05 },
+  const sliders: { key: keyof Settings; label: string; min: number; max: number; step: number; hint?: string }[] = [
+    { key: 'engage_sec',  label: 'Potential engagement from (sec)', min: 1,   max: 30, step: 1,   hint: 'Dwell at or above this is flagged' },
+    { key: 'strong_sec',  label: 'Stronger signal from (sec)',      min: 2,   max: 60, step: 1,   hint: 'Dwell at or above this is a stronger signal' },
+    { key: 'grace_sec',   label: 'Gap tolerance (sec)',             min: 0,   max: 5,  step: 0.5, hint: 'Short gaps in tracking are bridged, not split into two visits' },
+    { key: 'confidence',  label: 'Detection confidence',            min: 0.2, max: 0.9, step: 0.05 },
   ];
   return (
     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
@@ -85,7 +89,7 @@ function SettingsPanel({ config, onChange, onClose }: {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Sliders size={15} className="text-cv-accent" />
-          <span className="font-semibold text-cv-text text-sm">Pipeline Settings</span>
+          <span className="font-semibold text-cv-text text-sm">Analysis Settings</span>
         </div>
         <button onClick={onClose} className="text-cv-sub hover:text-cv-text transition-colors"><X size={15} /></button>
       </div>
@@ -98,6 +102,7 @@ function SettingsPanel({ config, onChange, onClose }: {
           <input type="range" min={s.min} max={s.max} step={s.step} value={config[s.key]}
             onChange={e => onChange(s.key, parseFloat(e.target.value))}
             className="w-full h-1.5 bg-cv-border rounded-full appearance-none cursor-pointer accent-cv-accent" />
+          {s.hint && <p className="text-cv-sub text-[11px] mt-1">{s.hint}</p>}
         </div>
       ))}
     </motion.div>
@@ -135,12 +140,12 @@ function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?
         <div>
           <p className="text-cv-text font-semibold text-lg mb-1">Drop your video here</p>
           <p className="text-cv-sub text-sm">MP4 · AVI · MOV · MKV — up to 500 MB</p>
-          <p className="text-cv-sub text-xs mt-2 font-mono">Retail CCTV · Event gate · Hospital corridor</p>
+          <p className="text-cv-sub text-xs mt-2 font-mono">Prerecorded footage from a single storefront camera</p>
         </div>
         <div className="flex items-center gap-6 text-xs text-cv-sub font-mono flex-wrap justify-center">
           <span className="flex items-center gap-1.5"><Camera size={11} className="text-cv-accent" />YOLOv8 detection</span>
           <span className="flex items-center gap-1.5"><Activity size={11} className="text-cv-cyan" />ByteTrack IDs</span>
-          <span className="flex items-center gap-1.5"><Users size={11} className="text-cv-green" />Zone counting</span>
+          <span className="flex items-center gap-1.5"><Users size={11} className="text-cv-green" />Storefront zone</span>
           <span className="flex items-center gap-1.5"><Clock size={11} className="text-cv-amber" />Dwell time</span>
         </div>
       </motion.div>
@@ -148,8 +153,8 @@ function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?
   );
 }
 
-/* ── Live preview frame (the key new feature) ─────────────── */
-function LivePreview({ result, isProcessing }: { result: AnalysisResult; isProcessing: boolean }) {
+/* ── Live preview frame ───────────────────────────────────── */
+function LivePreview({ result }: { result: AnalysisResult }) {
   const fd = result.frame_data;
   const pct = Math.round(result.progress ?? 0);
 
@@ -183,18 +188,9 @@ function LivePreview({ result, isProcessing }: { result: AnalysisResult; isProce
         </div>
       </div>
 
-      {/*
-        ══════════════════════════════════════════════════════
-        LIVE PREVIEW FRAME — this is the KEY new feature.
-        Every N frames the backend encodes a preview frame as
-        base64 JPEG and streams it via SSE.
-        The frontend displays it here, updating in real time.
-        Users see exactly what the pipeline is doing frame by frame.
-        ══════════════════════════════════════════════════════
-      */}
+      {/* Live annotated frame streamed from the backend */}
       {result.preview_frame ? (
         <div className="relative rounded-2xl overflow-hidden border border-cv-border bg-black">
-          {/* The actual live frame from the pipeline */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`data:image/jpeg;base64,${result.preview_frame}`}
@@ -202,23 +198,17 @@ function LivePreview({ result, isProcessing }: { result: AnalysisResult; isProce
             className="w-full object-cover"
             style={{ aspectRatio: '16/9' }}
           />
-          {/* Overlay: LIVE badge */}
           <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/75 backdrop-blur-sm px-3 py-1.5 rounded-lg">
             <div className="w-2 h-2 bg-cv-green rounded-full animate-pulse" />
             <span className="text-cv-green font-mono text-[11px] font-bold">LIVE PREVIEW</span>
           </div>
-          {/* Overlay: FPS */}
           <div className="absolute top-3 right-3 bg-black/75 backdrop-blur-sm px-3 py-1.5 rounded-lg">
             <span className="text-cv-sub font-mono text-[11px]">
               {(result.fps ?? 0).toFixed(1)} FPS · Frame {result.processed_frames}
             </span>
           </div>
-          {/* Scan line */}
-          <div className="absolute left-0 right-0 h-px pointer-events-none"
-            style={{ background: 'linear-gradient(90deg,transparent,rgba(108,99,255,.4),transparent)', animation: 'scan 3s linear infinite' }} />
         </div>
       ) : (
-        /* Placeholder while first frame loads */
         <div className="rounded-2xl border border-cv-border bg-cv-surface flex items-center justify-center" style={{ aspectRatio: '16/9' }}>
           <div className="text-center">
             <Loader2 size={32} className="text-cv-accent animate-spin mx-auto mb-3" />
@@ -227,26 +217,34 @@ function LivePreview({ result, isProcessing }: { result: AnalysisResult; isProce
         </div>
       )}
 
-      {/* Live stats under the preview */}
+      {/* Live counters under the preview */}
       {fd && (
-        <StatsPanel
-          liveCount={fd.live_count}
-          countIn={fd.count_in}
-          countOut={fd.count_out}
-          occupancy={fd.occupancy}
-          entryRate={fd.entry_rate}
-          avgDwell={fd.avg_dwell}
-          zoneCounts={fd.zone_counts}
-          fps={fd.fps}
-          isLive
-        />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: 'Video time',     value: `${fd.time_sec.toFixed(1)}s`, color: 'text-cv-cyan'  },
+            { label: 'In zone now',    value: fd.in_zone_now,               color: 'text-cv-accent' },
+            { label: 'Tracked visits', value: fd.visits,                    color: 'text-cv-text'  },
+            { label: 'Potential / strong', value: `${fd.potential} / ${fd.strong}`, color: 'text-cv-amber' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="glow-border bg-cv-card rounded-2xl p-4">
+              <p className={clsx('font-display text-2xl', color)}>{value}</p>
+              <p className="text-cv-sub text-xs font-mono mt-1">{label}</p>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
 /* ── Full results panel (shown after processing completes) ─── */
-function ResultsPanel({ result, jobId }: { result: AnalysisResult; jobId: string }) {
+function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
+  result: AnalysisResult;
+  jobId: string;
+  engageSec: number;
+  strongSec: number;
+  onThreshold: (k: 'engage_sec' | 'strong_sec', v: number) => void;
+}) {
   const stats = result.stats;
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
@@ -269,6 +267,24 @@ function ResultsPanel({ result, jobId }: { result: AnalysisResult; jobId: string
         </a>
       </motion.div>
 
+      {/* Adjustable thresholds — results below update instantly */}
+      <div className="glow-border bg-cv-card rounded-2xl p-4 flex items-center gap-4 flex-wrap">
+        <span className="text-cv-sub text-xs font-mono">THRESHOLDS</span>
+        <label className="flex items-center gap-2 text-sm text-cv-sub">
+          Potential from
+          <input type="number" min={1} max={strongSec} value={engageSec}
+            onChange={e => onThreshold('engage_sec', Math.max(1, parseFloat(e.target.value) || 1))}
+            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
+        </label>
+        <label className="flex items-center gap-2 text-sm text-cv-sub">
+          Stronger from
+          <input type="number" min={engageSec} value={strongSec}
+            onChange={e => onThreshold('strong_sec', Math.max(engageSec, parseFloat(e.target.value) || engageSec))}
+            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
+        </label>
+        <span className="text-cv-sub text-[11px] ml-auto">Table and counts update live. The annotated video keeps the thresholds used when it was processed.</span>
+      </div>
+
       {/* Annotated video player — inline on the website */}
       {result.annotated_video_url && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
@@ -278,11 +294,10 @@ function ResultsPanel({ result, jobId }: { result: AnalysisResult; jobId: string
             <Film size={15} className="text-cv-accent" />
             <span className="font-semibold text-cv-text text-sm">Annotated Output Video</span>
             <span className="text-cv-sub text-xs font-mono ml-auto">
-              Bounding boxes · Track IDs · Zone overlays · HUD
+              Boxes · Track IDs · Live dwell · Storefront zone
             </span>
           </div>
 
-          {/* VideoPlayer with error handling and CORS-aware src */}
           <VideoPlayerInline src={result.annotated_video_url} />
 
           <div className="px-5 py-3 flex items-center justify-between border-t border-cv-border">
@@ -298,83 +313,14 @@ function ResultsPanel({ result, jobId }: { result: AnalysisResult; jobId: string
         </motion.div>
       )}
 
-      {/* Key stats */}
-      {stats && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-          <StatsPanel
-            liveCount={0}
-            countIn={stats.total_in}
-            countOut={stats.total_out}
-            occupancy={stats.peak_occupancy}
-            entryRate={0}
-            avgDwell={stats.avg_dwell_sec}
-            zoneCounts={{}}
-            fps={stats.source_fps}
-            isLive={false}
-          />
-        </motion.div>
-      )}
-
-      {/* Heatmap inline */}
-      {result.heatmap_url && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-          className="glow-border bg-cv-card rounded-2xl overflow-hidden"
-        >
-          <div className="px-5 py-3 border-b border-cv-border flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ImageIcon size={15} className="text-cv-red" />
-              <span className="font-semibold text-cv-text text-sm">Crowd Density Heatmap</span>
-            </div>
-            <a href={result.heatmap_url} download
-              className="flex items-center gap-1.5 text-cv-accent hover:text-cv-accentL text-xs font-mono transition-colors">
-              <Download size={12} /> Download PNG
-            </a>
-          </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={result.heatmap_url} alt="Density heatmap" className="w-full object-cover" />
-          <div className="px-5 py-3 border-t border-cv-border">
-            <p className="text-cv-sub text-xs font-mono">
-              Hot (red) = high foot traffic · Cold (blue) = low traffic · Gaussian σ=40
-            </p>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Analytics chart */}
-      {result.frame_stats_url && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-          <LiveChart frameStatsUrl={result.frame_stats_url} />
-        </motion.div>
-      )}
-
-      {/* CSV download links */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }}
-        className="glow-border bg-cv-card rounded-2xl p-5"
-      >
-        <div className="flex items-center gap-2 mb-4">
-          <FileText size={15} className="text-cv-cyan" />
-          <span className="font-semibold text-cv-text text-sm">Data Export</span>
-          <span className="text-cv-sub text-xs font-mono ml-auto">All files included in ZIP</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: 'frame_stats.csv', url: result.frame_stats_url, desc: 'Per-frame stats + FPS'      },
-            { label: 'dwell_times.csv', url: result.dwell_url,       desc: 'Dwell time per person'      },
-          ].map(({ label, url, desc }) => (
-            <a key={label} href={url} download
-              className={clsx(
-                'flex items-center gap-2 bg-cv-surface border border-cv-border hover:border-cv-accent/40 rounded-xl p-3 transition-colors group',
-                !url && 'opacity-40 pointer-events-none'
-              )}>
-              <FileText size={13} className="text-cv-sub group-hover:text-cv-accent transition-colors" />
-              <div>
-                <p className="text-cv-text text-xs font-mono">{label}</p>
-                <p className="text-cv-sub text-[10px]">{desc}</p>
-              </div>
-              <Download size={11} className="text-cv-sub ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-            </a>
-          ))}
-        </div>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+        <EngagementResults
+          visits={result.visits ?? []}
+          engageSec={engageSec}
+          strongSec={strongSec}
+          durationSec={stats?.duration_sec ?? 0}
+          csvUrl={result.visits_url}
+        />
       </motion.div>
     </div>
   );
@@ -383,26 +329,39 @@ function ResultsPanel({ result, jobId }: { result: AnalysisResult; jobId: string
 /* ── Main dashboard page ──────────────────────────────────── */
 export default function DashboardPage() {
   const [file, setFile]               = useState<File | null>(null);
+  const [zone, setZone]               = useState<Zone | null>(null);
   const [jobId, setJobId]             = useState<string | null>(null);
   const [result, setResult]           = useState<AnalysisResult | null>(null);
   const [state, setState]             = useState<'idle'|'uploading'|'processing'|'done'|'error'>('idle');
   const [error, setError]             = useState<string | null>(null);
   const [showConfig, setShowConfig]   = useState(false);
   const [backendOnline, setBackend]   = useState<boolean | null>(null);
-  const [config, setConfig]           = useState({ confidence: 0.40 });
+  const [config, setConfig]           = useState<Settings>({
+    confidence: 0.40, engage_sec: 5, strong_sec: 10, grace_sec: 1.5,
+  });
   const stopStream = useRef<(()=>void)|null>(null);
 
   useEffect(() => { checkBackendHealth().then(setBackend); }, []);
 
+  // Keep strong >= engage whichever one the user moves
+  const setSetting = useCallback((k: keyof Settings, v: number) => {
+    setConfig(p => {
+      const next = { ...p, [k]: v };
+      if (k === 'engage_sec' && next.strong_sec < v) next.strong_sec = v;
+      if (k === 'strong_sec' && next.engage_sec > v) next.engage_sec = v;
+      return next;
+    });
+  }, []);
+
   const handleFile = useCallback((f: File) => {
-    setFile(f); setResult(null); setState('idle'); setError(null);
+    setFile(f); setZone(null); setResult(null); setState('idle'); setError(null);
   }, []);
 
   const handleStart = async () => {
-    if (!file) return;
+    if (!file || !zone) return;
     setState('uploading'); setError(null);
     try {
-      const { job_id } = await uploadVideo(file, config);
+      const { job_id } = await uploadVideo(file, { ...config, zone });
       setJobId(job_id); setState('processing');
       stopStream.current = streamJobUpdates(
         job_id,
@@ -418,9 +377,11 @@ export default function DashboardPage() {
 
   const handleReset = () => {
     stopStream.current?.();
-    setFile(null); setJobId(null); setResult(null);
+    setFile(null); setZone(null); setJobId(null); setResult(null);
     setState('idle'); setError(null);
   };
+
+  const canStart = !!file && !!zone && !!backendOnline && state !== 'uploading';
 
   return (
     <div className="noise mesh-bg min-h-screen">
@@ -431,7 +392,7 @@ export default function DashboardPage() {
             <div className="w-7 h-7 bg-gradient-to-br from-cv-accent to-cv-cyan rounded-lg flex items-center justify-center">
               <Eye size={13} className="text-white" />
             </div>
-            <span className="font-display text-lg text-cv-text">CrowdVision</span>
+            <span className="font-display text-lg text-cv-text">Storefront Engagement</span>
             <ChevronRight size={14} className="text-cv-border" />
             <span className="text-cv-sub text-sm">Analysis</span>
           </div>
@@ -474,13 +435,15 @@ export default function DashboardPage() {
           <h1 className="font-display text-4xl text-cv-text mb-2">
             {state === 'done' ? 'Analysis Complete' :
              state === 'processing' ? 'Processing...' :
-             'Video Analysis'}
+             'Storefront Engagement Analysis'}
           </h1>
           <p className="text-cv-sub">
-            {state === 'idle'       && 'Upload a CCTV video to run the full people-counting pipeline.'}
+            {state === 'idle'       && (file
+              ? 'Mark the area in front of the store on the video, then start the analysis.'
+              : 'Upload a prerecorded storefront video to measure how long people stay near the shop.')}
             {state === 'uploading'  && 'Uploading your video to the backend...'}
             {state === 'processing' && 'YOLOv8n + ByteTrack running frame by frame. Preview updates live.'}
-            {state === 'done'       && 'Annotated video, heatmap, charts, and CSV files are ready below.'}
+            {state === 'done'       && 'Visits, engagement counts, the annotated video and CSV are ready below.'}
             {state === 'error'      && 'Something went wrong. See error details below.'}
           </p>
         </motion.div>
@@ -488,33 +451,35 @@ export default function DashboardPage() {
         <div className="grid md:grid-cols-3 gap-6">
           {/* Main column — 2/3 width */}
           <div className="md:col-span-2 space-y-4">
-            {/* Upload zone */}
+            {/* Upload / preview + zone */}
             <AnimatePresence>
               {(state === 'idle' || state === 'uploading') && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  <UploadZone onFile={handleFile} disabled={state === 'uploading'} />
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
+                  {!file && <UploadZone onFile={handleFile} disabled={state === 'uploading'} />}
 
                   {file && (
-                    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                      className="mt-3 glow-border bg-cv-card rounded-xl p-4 flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-cv-accent/10 rounded-lg flex items-center justify-center">
-                          <Film size={16} className="text-cv-accent" />
+                    <>
+                      <div className="glow-border bg-cv-card rounded-xl p-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 bg-cv-accent/10 rounded-lg flex items-center justify-center">
+                            <Film size={16} className="text-cv-accent" />
+                          </div>
+                          <div>
+                            <p className="text-cv-text text-sm font-medium">{file.name}</p>
+                            <p className="text-cv-sub text-xs font-mono">{(file.size/1e6).toFixed(1)} MB · {file.type}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-cv-text text-sm font-medium">{file.name}</p>
-                          <p className="text-cv-sub text-xs font-mono">{(file.size/1e6).toFixed(1)} MB · {file.type}</p>
-                        </div>
+                        <button onClick={handleReset} className="text-cv-sub hover:text-cv-red transition-colors"><X size={16} /></button>
                       </div>
-                      <button onClick={handleReset} className="text-cv-sub hover:text-cv-red transition-colors"><X size={16} /></button>
-                    </motion.div>
+
+                      <ZoneSelector file={file} zone={zone} onChange={setZone} />
+                    </>
                   )}
 
                   <AnimatePresence>
                     {showConfig && file && (
-                      <motion.div className="mt-3">
-                        <SettingsPanel config={config} onChange={(k,v) => setConfig(p=>({...p,[k]:v}))} onClose={() => setShowConfig(false)} />
+                      <motion.div>
+                        <SettingsPanel config={config} onChange={setSetting} onClose={() => setShowConfig(false)} />
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -522,17 +487,17 @@ export default function DashboardPage() {
                   {file && (
                     <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                       onClick={handleStart}
-                      disabled={state === 'uploading' || !backendOnline}
-                      whileHover={{ scale: backendOnline ? 1.02 : 1 }} whileTap={{ scale: backendOnline ? 0.98 : 1 }}
+                      disabled={!canStart}
+                      whileHover={{ scale: canStart ? 1.02 : 1 }} whileTap={{ scale: canStart ? 0.98 : 1 }}
                       className={clsx(
-                        'mt-4 w-full py-4 rounded-2xl font-semibold text-base flex items-center justify-center gap-3 transition-all',
-                        backendOnline ? 'bg-cv-accent hover:bg-cv-accentL text-white' : 'bg-cv-muted text-cv-sub cursor-not-allowed',
+                        'w-full py-4 rounded-2xl font-semibold text-base flex items-center justify-center gap-3 transition-all',
+                        canStart ? 'bg-cv-accent hover:bg-cv-accentL text-white' : 'bg-cv-muted text-cv-sub cursor-not-allowed',
                         state === 'uploading' && 'opacity-70 cursor-wait'
                       )}
                     >
                       {state === 'uploading'
                         ? <><Loader2 size={18} className="animate-spin" /> Uploading...</>
-                        : <><Play size={18} fill="currentColor" /> Start Analysis</>
+                        : <><Play size={18} fill="currentColor" /> {zone ? 'Start Analysis' : 'Draw the storefront zone to start'}</>
                       }
                     </motion.button>
                   )}
@@ -550,7 +515,7 @@ export default function DashboardPage() {
             <AnimatePresence>
               {state === 'processing' && result && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <LivePreview result={result} isProcessing />
+                  <LivePreview result={result} />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -559,7 +524,11 @@ export default function DashboardPage() {
             <AnimatePresence>
               {state === 'done' && result && jobId && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <ResultsPanel result={result} jobId={jobId} />
+                  <ResultsPanel
+                    result={result} jobId={jobId}
+                    engageSec={config.engage_sec} strongSec={config.strong_sec}
+                    onThreshold={setSetting}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -587,11 +556,11 @@ export default function DashboardPage() {
             <div className="glow-border bg-cv-card rounded-2xl p-5">
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">PIPELINE</p>
               {[
-                { n:'01', label:'YOLOv8n Detection',  color:'bg-cv-accent',  done: ['processing','done'].includes(state) },
-                { n:'02', label:'ByteTrack IDs',       color:'bg-cv-cyan',    done: ['processing','done'].includes(state) },
-                { n:'03', label:'Zone Counting',       color:'bg-cv-green',   done: ['processing','done'].includes(state) },
-                { n:'04', label:'Dwell Time',          color:'bg-cv-amber',   done: state === 'done' },
-                { n:'05', label:'Heatmap + CSV',       color:'bg-purple-500', done: state === 'done' },
+                { n:'01', label:'YOLOv8n Detection',   color:'bg-cv-accent', done: ['processing','done'].includes(state) },
+                { n:'02', label:'ByteTrack IDs',        color:'bg-cv-cyan',   done: ['processing','done'].includes(state) },
+                { n:'03', label:'Storefront Zone Test', color:'bg-cv-green',  done: ['processing','done'].includes(state) },
+                { n:'04', label:'Dwell Time',           color:'bg-cv-amber',  done: state === 'done' },
+                { n:'05', label:'Engagement Classes',   color:'bg-purple-500', done: state === 'done' },
               ].map(({ n, label, color, done }) => (
                 <div key={n} className="flex items-center gap-3 mb-3">
                   <div className={clsx(
@@ -612,11 +581,11 @@ export default function DashboardPage() {
             <div className="glow-border bg-cv-card rounded-2xl p-5">
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">YOU WILL GET</p>
               {[
-                { e:'🎬', l:'Annotated video (MP4)' },
-                { e:'🌡️', l:'Density heatmap (PNG)' },
-                { e:'📊', l:'Analytics dashboard'   },
-                { e:'📋', l:'2 CSV data files'      },
-                { e:'📦', l:'All files as ZIP'       },
+                { e:'🎬', l:'Annotated video (MP4)'   },
+                { e:'👣', l:'Tracked visits + dwell'  },
+                { e:'🎯', l:'Engagement classes'      },
+                { e:'📋', l:'visits.csv'              },
+                { e:'📦', l:'All files as ZIP'        },
               ].map(({ e, l }) => (
                 <div key={l} className="flex items-center gap-2 mb-2 text-sm text-cv-sub">
                   <span className="text-base">{e}</span>
@@ -629,9 +598,9 @@ export default function DashboardPage() {
             <div className="glow-border bg-cv-card rounded-2xl p-5">
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">TIPS</p>
               {[
-                'Overhead camera angle gives best accuracy',
+                'Draw the zone on the floor area in front of the shop',
                 'Keep videos under 100 MB for fast processing',
-                'Annotated output plays directly in browser',
+                'Thresholds can be changed after processing',
                 'Download ZIP before refreshing the page',
               ].map(t => (
                 <div key={t} className="flex items-start gap-2 mb-3">
