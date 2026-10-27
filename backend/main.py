@@ -1,7 +1,7 @@
 """
-Storefront Engagement FastAPI Backend
-=====================================
-Exposes the YOLOv8 + ByteTrack storefront dwell-time pipeline as a REST API
+CrowdVision FastAPI Backend
+===========================
+Exposes the YOLOv8 + ByteTrack people counting pipeline as a REST API
 with Server-Sent Events (SSE) for real-time progress streaming.
 
 Routes:
@@ -13,6 +13,9 @@ Routes:
 """
 
 import asyncio
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import base64
 import io
 import json
@@ -37,8 +40,8 @@ from processor import process_video_job, JobStore
 
 # ── App setup ─────────────────────────────────────────────────
 app = FastAPI(
-    title="Storefront Engagement API",
-    description="Storefront dwell-time analysis for prerecorded video",
+    title="CrowdVision API",
+    description="Real-Time People Counting & Queue Management Pipeline",
     version="2.0.0",
 )
 
@@ -104,10 +107,6 @@ async def analyze_video(
         cfg = json.loads(config)
     except Exception:
         cfg = {}
-
-    zone = cfg.get("zone")
-    if not isinstance(zone, dict) or not all(k in zone for k in ("x1", "y1", "x2", "y2")):
-        raise HTTPException(400, detail="A storefront zone (x1, y1, x2, y2) is required")
 
     # Create job
     job_id = str(uuid.uuid4())[:8]
@@ -234,13 +233,14 @@ async def download_file(job_id: str, file_type: str, request: Request):
         zip_path = job_dir / "results.zip"
         if not zip_path.exists():
             _build_zip(job_id, job_dir, job.get("filename", "video"))
-        return FileResponse(str(zip_path), filename=f"storefront_{job_id}.zip",
+        return FileResponse(str(zip_path), filename=f"crowdvision_{job_id}.zip",
                             media_type="application/zip",
                             headers={"Access-Control-Allow-Origin": "*"})
 
     file_map = {
         "video":   (job_dir / "annotated.mp4",  "video/mp4"),
-        "csv":     (job_dir / "visits.csv",      "text/csv"),
+        "heatmap": (job_dir / "heatmap.png",     "image/png"),
+        "csv":     (job_dir / "frame_stats.csv", "text/csv"),
     }
     item = file_map.get(file_type)
     if not item:
@@ -302,10 +302,44 @@ async def get_named_file(job_id: str, filename: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
-    path = Path(job["job_dir"]) / Path(filename).name
+    path = Path(job["job_dir"]) / filename
     if not path.exists():
         raise HTTPException(404, detail="File not found")
     return FileResponse(str(path))
+
+
+class EmailTestRequest(BaseModel):
+    email_from: str
+    email_password: str
+    email_to: str
+
+
+@app.post("/api/test-email")
+async def test_email(req: EmailTestRequest):
+    """Send a test email to verify Gmail credentials."""
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = req.email_from
+        msg["To"]      = req.email_to
+        msg["Subject"] = "[CrowdVision] Test Alert — Connection Successful"
+        body = (
+            "This is a test email from CrowdVision.\n\n"
+            "Your email alert settings are configured correctly.\n"
+            "You will receive alerts like this when:\n"
+            "  - Queue zone exceeds threshold for 30+ seconds\n"
+            "  - General overcrowding sustained for 30+ seconds\n"
+            "  - Rapid crowd influx detected (>2.5 persons/sec)\n\n"
+            "-- CrowdVision Alert System"
+        )
+        msg.attach(MIMEText(body, "plain"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
+            s.login(req.email_from, req.email_password)
+            s.sendmail(req.email_from, req.email_to, msg.as_string())
+        return {"status": "ok", "message": f"Test email sent to {req.email_to}"}
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(400, detail="Authentication failed. Check Gmail address and App Password.")
+    except Exception as e:
+        raise HTTPException(400, detail=f"Email failed: {str(e)}")
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -328,10 +362,15 @@ def _build_response(job_id: str, job: dict) -> dict:
     }
 
     if job.get("status") == "done":
-        resp["stats"]  = job.get("stats")
-        resp["visits"] = job.get("visits")
+        resp["stats"]   = job.get("stats")
+        resp["zones"]   = job.get("zones")
+        resp["alerts"]  = job.get("alerts")
+        # Download URLs
         resp["annotated_video_url"] = f"{be_url}/api/download/{job_id}/video"
-        resp["visits_url"]          = f"{be_url}/api/file/{job_id}/visits.csv"
+        resp["heatmap_url"]         = f"{be_url}/api/download/{job_id}/heatmap"
+        resp["frame_stats_url"]     = f"{be_url}/api/file/{job_id}/frame_stats.csv"
+        resp["events_url"]          = f"{be_url}/api/file/{job_id}/events.csv"
+        resp["dwell_url"]           = f"{be_url}/api/file/{job_id}/dwell_times.csv"
 
     return resp
 
@@ -339,9 +378,13 @@ def _build_response(job_id: str, job: dict) -> dict:
 def _build_zip(job_id: str, job_dir: Path, video_name: str):
     """Create a ZIP of all result files."""
     zip_path = job_dir / "results.zip"
-    files_to_include = ["annotated.mp4", "visits.csv"]
+    files_to_include = [
+        "annotated.mp4", "heatmap.png", "analytics_dashboard.png",
+        "frame_stats.csv", "events.csv", "dwell_times.csv", "alerts.csv",
+        "evaluation.png",
+    ]
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for fname in files_to_include:
             fpath = job_dir / fname
             if fpath.exists():
-                zf.write(str(fpath), arcname=f"storefront_{job_id}/{fname}")
+                zf.write(str(fpath), arcname=f"crowdvision_{job_id}/{fname}")
