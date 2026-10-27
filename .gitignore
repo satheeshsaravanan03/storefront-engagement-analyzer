@@ -1,0 +1,37 @@
+# Node
+node_modules/
+.next/
+.vercel/
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.env
+*.egg-info/
+
+# Output files
+/tmp/
+crowdvision_output/
+*.mp4
+*.avi
+*.zip
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Env
+.env.local
+.env.production
+.env*.local
+
+# TypeScript build cache
+*.tsbuildinfo

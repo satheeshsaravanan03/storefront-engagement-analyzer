@@ -1,0 +1,157 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Custom scrollbar ─────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #111114; }
+::-webkit-scrollbar-thumb { background: #2A2A32; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #6C63FF; }
+
+/* ── Selection ────────────────────────────────────────────── */
+::selection { background: rgba(108, 99, 255, 0.35); color: #E8E8F0; }
+
+/* ── Scan line overlay effect ─────────────────────────────── */
+.scanlines {
+  position: relative;
+  overflow: hidden;
+}
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ── Noise texture overlay ────────────────────────────────── */
+.noise::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Gradient mesh background ─────────────────────────────── */
+.mesh-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(108, 99, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(6, 182, 212, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 60% at 50% 50%, rgba(34, 197, 94, 0.03) 0%, transparent 70%),
+    #0A0A0B;
+}
+
+/* ── Glowing border ───────────────────────────────────────── */
+.glow-border {
+  border: 1px solid rgba(108, 99, 255, 0.3);
+  box-shadow:
+    0 0 0 1px rgba(108, 99, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.glow-border:hover {
+  border-color: rgba(108, 99, 255, 0.6);
+  box-shadow:
+    0 0 0 1px rgba(108, 99, 255, 0.2),
+    0 0 24px rgba(108, 99, 255, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ── CCTV grid overlay ────────────────────────────────────── */
+.grid-overlay {
+  background-image:
+    linear-gradient(rgba(108, 99, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(108, 99, 255, 0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* ── Stat card number animation ───────────────────────────── */
+.stat-number {
+  font-variant-numeric: tabular-nums;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Upload drop zone ─────────────────────────────────────── */
+.drop-zone {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.drop-zone.dragging {
+  border-color: rgba(108, 99, 255, 0.8);
+  background: rgba(108, 99, 255, 0.06);
+  box-shadow: 0 0 40px rgba(108, 99, 255, 0.2);
+}
+
+/* ── Alert pulse ──────────────────────────────────────────── */
+.alert-pulse {
+  animation: alertPulse 1.5s ease-in-out infinite;
+}
+@keyframes alertPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
+/* ── Progress bar shimmer ─────────────────────────────────── */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(108, 99, 255, 0.1) 25%,
+    rgba(108, 99, 255, 0.3) 50%,
+    rgba(108, 99, 255, 0.1) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Video canvas container ───────────────────────────────── */
+.video-container {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: #000;
+  overflow: hidden;
+}
+
+/* ── Heatmap canvas ───────────────────────────────────────── */
+canvas.heatmap {
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+/* ── Chart tooltip ────────────────────────────────────────── */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #18181C !important;
+  border: 1px solid #2A2A32 !important;
+  border-radius: 8px !important;
+  color: #E8E8F0 !important;
+}
+
+/* ── Typing cursor ────────────────────────────────────────── */
+.typing-cursor::after {
+  content: '|';
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ── Zone badge ───────────────────────────────────────────── */
+.zone-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
