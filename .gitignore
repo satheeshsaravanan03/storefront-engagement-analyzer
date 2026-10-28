@@ -35,3 +35,7 @@ crowdvision_output/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Downloaded model weights (fetched automatically by ultralytics)
+backend/yolov8n-pose.pt
+backend/yolov8m.pt

@@ -120,6 +120,70 @@ def has_frontal_face(frame: np.ndarray, kp: np.ndarray) -> bool:
     return len(faces) > 0
 
 
+# ── Distraction: phone, eating / drinking, head down ──────────
+L_EAR, R_EAR, L_WRIST, R_WRIST = 3, 4, 9, 10
+PHONE_CLS = 67
+# COCO: bottle, wine glass, cup, banana, apple, sandwich, orange, hot dog, pizza, donut, cake
+FOOD_DRINK_CLS = (39, 40, 41, 46, 47, 48, 49, 52, 53, 54, 55)
+OBJ_CLASSES = [PHONE_CLS, *FOOD_DRINK_CLS]
+
+
+def head_down(kp: np.ndarray, kc: np.ndarray) -> bool:
+    """
+    Looking down (e.g. at a phone): the ears rise above the eye line. For a head
+    held level the ears sit slightly below the eyes. Needs both ears visible.
+    """
+    if kc[L_EAR] < 0.3 or kc[R_EAR] < 0.3:
+        return False
+    eye_dist = abs(kp[R_EYE][0] - kp[L_EYE][0])
+    if eye_dist < 6:
+        return False
+    ear_y = (kp[L_EAR][1] + kp[R_EAR][1]) / 2.0
+    eye_y = (kp[L_EYE][1] + kp[R_EYE][1]) / 2.0
+    return (ear_y - eye_y) / eye_dist < 0.05
+
+
+def hand_at_mouth(kp: np.ndarray, kc: np.ndarray, reach: float = 1.1) -> bool:
+    """A wrist right next to the face: eating, drinking, or a phone at the ear."""
+    head = abs(kp[R_EYE][0] - kp[L_EYE][0]) * 2.2
+    if head < 12:
+        return False
+    for w in (L_WRIST, R_WRIST):
+        if kc[w] >= 0.5 and np.hypot(*(kp[w] - kp[NOSE])) < reach * head:
+            return True
+    return False
+
+
+def busy_with_object(objs, cands):
+    """
+    Match detected phones / food / drinks to the people holding them.
+    objs:  [(cls, (x1, y1, x2, y2))]
+    cands: [(tid, (x1, y1, x2, y2), kp, kc)]  near people with a readable face
+    Returns {tid: reason}. A phone counts if it is inside the person's box and
+    closest to that person's hand; food or a drink counts only near the mouth.
+    """
+    out = {}
+    for cls, (ox1, oy1, ox2, oy2) in objs:
+        cx, cy = (ox1 + ox2) / 2.0, (oy1 + oy2) / 2.0
+        best, best_d = None, 1e9
+        for tid, (x1, y1, x2, y2), kp, kc in cands:
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            pts = [kp[w] for w in (L_WRIST, R_WRIST) if kc[w] >= 0.3] or [kp[NOSE]]
+            d = min(np.hypot(cx - pt[0], cy - pt[1]) for pt in pts)
+            head = abs(kp[R_EYE][0] - kp[L_EYE][0]) * 2.2
+            if cls == PHONE_CLS:
+                # in a hand, or held to the ear / face
+                ok = min(d, np.hypot(cx - kp[NOSE][0], cy - kp[NOSE][1])) < 3.0 * max(head, 1.0)
+            else:
+                ok = np.hypot(cx - kp[NOSE][0], cy - kp[NOSE][1]) < 1.8 * max(head, 1.0)
+            if ok and d < best_d:
+                best, best_d = tid, d
+        if best is not None:
+            out[best] = "phone" if cls == PHONE_CLS else "eating/drinking"
+    return out
+
+
 # ── Per-person attention tracking ─────────────────────────────
 class AttentionTracker:
     """
@@ -208,6 +272,10 @@ def process_video_job(
         max_offset   = float(config.get("max_offset", 0.45))    # nose offset in eye-distances
         require_face = bool(config.get("require_face", True))   # also confirm with a frontal-face detector
         kp_conf      = float(config.get("kp_conf", 0.60))
+        ignore_busy  = bool(config.get("ignore_busy", True))    # skip people on a phone / eating / head down
+        obj_conf     = float(config.get("obj_conf", 0.25))
+        obj_every    = int(config.get("obj_every", 3))          # run the object detector every N frames
+        busy_hold    = float(config.get("busy_hold_sec", 1.0))  # keep "busy" this long after an object is seen
         if not glance_sec <= engage_sec <= strong_sec:
             raise ValueError("Thresholds must satisfy glance <= engage <= strong")
         device = "0" if torch.cuda.is_available() else "cpu"
@@ -216,6 +284,8 @@ def process_video_job(
         jobs.update(job_id, {"status": "processing", "phase": "loading model"})
         model = YOLO("yolov8n-pose.pt")
         _ = model(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, device=device)
+        obj_model = YOLO("yolov8m.pt") if ignore_busy else None
+        busy: Dict[int, tuple] = {}   # track id -> (last fid it counts as busy, reason)
 
         # ── Open video ───────────────────────────────────────
         cap = cv2.VideoCapture(video_path)
@@ -269,7 +339,8 @@ def process_video_job(
                 fid += 1
                 continue
 
-            people = []  # (tid, x1, y1, x2, y2, near, facing)
+            people = []  # (tid, x1, y1, x2, y2, near, facing, reason)
+            recs = []    # near people: (tid, box, kp, kc, facing, reason, h)
             r = results[0]
             if r.boxes is not None and r.boxes.id is not None and r.keypoints is not None:
                 boxes = r.boxes.xyxy.cpu().numpy().astype(int)
@@ -283,31 +354,54 @@ def process_video_job(
                     x2, y2 = min(W - 1, x2), min(H - 1, y2)
                     h = y2 - y1
                     near = h >= near_ratio * H
-                    facing = near and is_facing(kp, kc, kp_conf, max_offset)
-                    if facing and require_face:
-                        facing = has_frontal_face(frame, kp)
-                    tracker.update(int(tid), fid, near, facing, (x1 + x2) / 2.0, (y1 + y2) / 2.0, h)
-                    people.append((int(tid), x1, y1, x2, y2, near, facing))
+                    facing, reason = False, "not looking"
+                    if near and is_facing(kp, kc, kp_conf, max_offset):
+                        if ignore_busy and head_down(kp, kc):
+                            reason = "head down"
+                        elif ignore_busy and hand_at_mouth(kp, kc):
+                            reason = "hand at face"
+                        else:
+                            facing = (not require_face) or has_frontal_face(frame, kp)
+                    recs.append((int(tid), (x1, y1, x2, y2), kp, kc, near, facing, reason, h))
+
+                # Phones / food / drinks: only worth running when someone looks attentive
+                if obj_model is not None and fid % obj_every == 0:
+                    cands = [(t, b, kp, kc) for t, b, kp, kc, near, f, _, _ in recs if near and f]
+                    if cands:
+                        try:
+                            od = obj_model(frame, verbose=False, conf=obj_conf, imgsz=1280,
+                                           classes=OBJ_CLASSES, device=device)[0]
+                            objs = [(int(b.cls), tuple(b.xyxy[0].cpu().numpy())) for b in od.boxes]
+                            for t, why in busy_with_object(objs, cands).items():
+                                busy[t] = (fid + int(busy_hold * FPS), why)
+                        except Exception:
+                            pass
+
+                for tid, (x1, y1, x2, y2), kp, kc, near, facing, reason, h in recs:
+                    if facing and tid in busy and fid <= busy[tid][0]:
+                        facing, reason = False, busy[tid][1]
+                    tracker.update(tid, fid, near, facing, (x1 + x2) / 2.0, (y1 + y2) / 2.0, h)
+                    people.append((tid, x1, y1, x2, y2, near, facing, reason))
 
             viewers = [t for t, p in tracker.people.items() if p["attention"] >= min_look_sec]
             counts = {GLANCED: 0, LOOKED: 0, ENGAGED: 0, STRONG: 0}
             for t in viewers:
                 counts[classify(tracker.attention(t), glance_sec, engage_sec, strong_sec)] += 1
-            looking_now = sum(1 for _, _, _, _, _, _, f in people if f)
+            looking_now = sum(1 for _, _, _, _, _, _, f, _ in people if f)
 
             fps_buf.append(1.0 / max(time.time() - t0, 1e-6))
             fps = float(np.mean(fps_buf))
             t_video = fid / FPS
 
             # ── Render ──────────────────────────────────────
-            for tid, x1, y1, x2, y2, near, facing in people:
+            for tid, x1, y1, x2, y2, near, facing, reason in people:
                 if not near:  # far away: ignored, drawn faintly
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (110, 110, 110), 1)
                     continue
                 a = tracker.attention(tid)
                 color = COLORS[classify(a, glance_sec, engage_sec, strong_sec)] if facing else (90, 90, 230)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if facing else 2)
-                label = f"#{tid} looking {a:.1f}s" if facing else f"#{tid} not looking"
+                label = f"#{tid} looking {a:.1f}s" if facing else f"#{tid} {reason}"
                 cv2.putText(frame, label, (x1, max(14, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
