@@ -51,6 +51,14 @@ class JobStore:
         with self._lock:
             return self._data.get(job_id, {}).copy() if job_id in self._data else None
 
+    def all(self) -> Dict[str, dict]:
+        with self._lock:
+            return {k: v.copy() for k, v in self._data.items()}
+
+    def delete(self, job_id: str):
+        with self._lock:
+            self._data.pop(job_id, None)
+
 
 # ── Behaviour classification ──────────────────────────────────
 GLANCED = "glanced"   # looked, but briefly
@@ -95,8 +103,13 @@ def is_facing(kp: np.ndarray, kc: np.ndarray, kp_conf: float, max_offset: float)
     eye_dist = abs(kp[R_EYE][0] - kp[L_EYE][0])
     if eye_dist < 6:  # head too small for a reliable reading
         return False
-    mid_x = (kp[L_EYE][0] + kp[R_EYE][0]) / 2.0
-    return abs(kp[NOSE][0] - mid_x) / eye_dist <= max_offset
+    return nose_offset(kp) <= max_offset
+
+
+def nose_offset(kp: np.ndarray) -> float:
+    """Nose distance from the eye midpoint in eye-distances: 0 = straight on, larger = head turned."""
+    eye_dist = max(abs(kp[R_EYE][0] - kp[L_EYE][0]), 1e-6)
+    return abs(kp[NOSE][0] - (kp[L_EYE][0] + kp[R_EYE][0]) / 2.0) / eye_dist
 
 
 _FACE_CASCADE = None
@@ -120,7 +133,10 @@ def has_frontal_face(frame: np.ndarray, kp: np.ndarray) -> bool:
     if x2 - x1 < 24 or y2 - y1 < 24:
         return False
     gray = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
-    faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+    try:
+        faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+    except cv2.error:
+        return False  # not confirmed; never let one odd crop fail the whole job
     return len(faces) > 0
 
 
@@ -401,7 +417,8 @@ def process_video_job(
                     tracker.update(tid, fid, near, facing, (x1 + x2) / 2.0, (y1 + y2) / 2.0, h)
                     people.append((tid, x1, y1, x2, y2, near, facing, reason))
                     if capture and facing:  # taken before any boxes are drawn on the frame
-                        sc = snapshot_score(frame, (x1, y1, x2, y2))
+                        # prefer the most frontal frame: weight size/sharpness by how straight the head is
+                        sc = snapshot_score(frame, (x1, y1, x2, y2)) * max(0.2, 1.0 - nose_offset(kp) / max_offset)
                         best = snaps.get(tid)
                         if best is None or sc > best["score"]:
                             pad_x, pad_y = int((x2 - x1) * 0.05), int(h * 0.03)

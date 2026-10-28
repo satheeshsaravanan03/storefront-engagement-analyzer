@@ -133,6 +133,35 @@ export function streamJobUpdates(
   return () => es.close();
 }
 
+/* ── Job records (jobs page) ──────────────────────────────── */
+export interface JobSummary {
+  job_id: string;
+  filename: string;
+  created_at: number;        // unix seconds
+  status: AnalysisResult['status'];
+  progress: number;
+  file_mb: number;
+  duration_sec: number | null;
+  viewers: number;
+  engaged: number;
+  strong: number;
+  error?: string | null;
+}
+
+export async function listJobs(): Promise<JobSummary[]> {
+  const res = await fetch(`${BACKEND}/api/jobs`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load jobs');
+  return res.json();
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(err.detail || 'Delete failed');
+  }
+}
+
 /* ── Health check ─────────────────────────────────────────── */
 export async function checkBackendHealth(): Promise<boolean> {
   try {

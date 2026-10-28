@@ -6,10 +6,11 @@ import {
   Eye, Upload, Settings2, Play, AlertTriangle, CheckCircle2,
   Loader2, Sliders, X, Wifi, WifiOff, Download,
   Activity, Users, Clock, Camera, Zap,
-  ChevronRight, Film,
+  ChevronRight, Film, List,
 } from 'lucide-react';
+import Link from 'next/link';
 import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult } from '@/lib/api';
-import { EngagementResults } from '@/components/EngagementResults';
+import { SummaryCards, ViewersTable } from '@/components/EngagementResults';
 import clsx from 'clsx';
 
 /* ── Inline video player with error handling ─────────────────
@@ -92,10 +93,9 @@ type Settings = {
   min_look_sec: number; near_ratio: number;
 };
 
-function SettingsPanel({ config, onChange, onClose }: {
+function SettingsPanel({ config, onChange }: {
   config: Settings;
   onChange: (k: keyof Settings, v: number) => void;
-  onClose: () => void;
 }) {
   const sliders: { key: keyof Settings; label: string; min: number; max: number; step: number; hint?: string }[] = [
     { key: 'min_look_sec', label: 'Minimum look to count (sec)',      min: 0.5, max: 5,  step: 0.5, hint: 'Shorter looks are not counted as viewers' },
@@ -114,7 +114,6 @@ function SettingsPanel({ config, onChange, onClose }: {
           <Sliders size={15} className="text-cv-accent" />
           <span className="font-semibold text-cv-text text-sm">Analysis Settings</span>
         </div>
-        <button onClick={onClose} className="text-cv-sub hover:text-cv-text transition-colors"><X size={15} /></button>
       </div>
       {sliders.map(s => (
         <div key={s.key}>
@@ -260,14 +259,37 @@ function LivePreview({ result }: { result: AnalysisResult }) {
   );
 }
 
+/* ── Behaviour thresholds used for this analysis (read-only) ── */
+function ThresholdValues({ glanceSec, engageSec, strongSec }: {
+  glanceSec: number;
+  engageSec: number;
+  strongSec: number;
+}) {
+  return (
+    <div className="glow-border bg-cv-card rounded-2xl p-5 space-y-3">
+      <p className="text-xs font-mono text-cv-sub tracking-wider">THRESHOLDS USED</p>
+      {[
+        ['Looked from', glanceSec],
+        ['Engaged from', engageSec],
+        ['Strong from', strongSec],
+      ].map(([label, v]) => (
+        <div key={label} className="flex items-center justify-between text-sm text-cv-sub">
+          {label}
+          <span className="font-mono text-cv-text">{v} s</span>
+        </div>
+      ))}
+      <p className="text-cv-sub text-[11px]">To try other thresholds, set them before uploading and run the analysis again.</p>
+    </div>
+  );
+}
+
 /* ── Full results panel (shown after processing completes) ─── */
-function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onThreshold }: {
+function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
   result: AnalysisResult;
   jobId: string;
   glanceSec: number;
   engageSec: number;
   strongSec: number;
-  onThreshold: (k: 'glance_sec' | 'engage_sec' | 'strong_sec', v: number) => void;
 }) {
   const stats = result.stats;
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -290,30 +312,6 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onThresh
           <Download size={15} /> Download ZIP
         </a>
       </motion.div>
-
-      {/* Adjustable thresholds — results below update instantly */}
-      <div className="glow-border bg-cv-card rounded-2xl p-4 flex items-center gap-4 flex-wrap">
-        <span className="text-cv-sub text-xs font-mono">THRESHOLDS</span>
-        <label className="flex items-center gap-2 text-sm text-cv-sub">
-          Looked from
-          <input type="number" min={1} max={engageSec} value={glanceSec}
-            onChange={e => onThreshold('glance_sec', Math.max(1, parseFloat(e.target.value) || 1))}
-            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
-        </label>
-        <label className="flex items-center gap-2 text-sm text-cv-sub">
-          Engaged from
-          <input type="number" min={glanceSec} max={strongSec} value={engageSec}
-            onChange={e => onThreshold('engage_sec', Math.max(glanceSec, parseFloat(e.target.value) || glanceSec))}
-            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
-        </label>
-        <label className="flex items-center gap-2 text-sm text-cv-sub">
-          Strong from
-          <input type="number" min={engageSec} value={strongSec}
-            onChange={e => onThreshold('strong_sec', Math.max(engageSec, parseFloat(e.target.value) || engageSec))}
-            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
-        </label>
-        <span className="text-cv-sub text-[11px] ml-auto">Table and counts update live. The annotated video keeps the thresholds used when it was processed.</span>
-      </div>
 
       {/* Annotated video player — inline on the website */}
       {result.annotated_video_url && (
@@ -344,13 +342,11 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onThresh
       )}
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-        <EngagementResults
+        <ViewersTable
           viewers={result.viewers ?? []}
           glanceSec={glanceSec}
           engageSec={engageSec}
           strongSec={strongSec}
-          durationSec={stats?.duration_sec ?? 0}
-          ignored={stats?.ignored ?? 0}
           csvUrl={result.viewers_url}
           jsonUrl={result.engaged_json_url}
           imageBase={`${BACKEND}/api/file/${jobId}/`}
@@ -367,7 +363,6 @@ export default function DashboardPage() {
   const [result, setResult]           = useState<AnalysisResult | null>(null);
   const [state, setState]             = useState<'idle'|'uploading'|'processing'|'done'|'error'>('idle');
   const [error, setError]             = useState<string | null>(null);
-  const [showConfig, setShowConfig]   = useState(false);
   const [backendOnline, setBackend]   = useState<boolean | null>(null);
   const [config, setConfig]           = useState<Settings>({
     confidence: 0.40, glance_sec: 2, engage_sec: 5, strong_sec: 10, min_look_sec: 1, near_ratio: 0.30,
@@ -433,6 +428,10 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link href="/jobs"
+            className="glow-border bg-cv-card text-cv-sub hover:text-cv-text px-3 py-1.5 rounded-xl text-sm flex items-center gap-2 transition-colors">
+            <List size={14} /> Jobs
+          </Link>
           {/* Backend indicator */}
           <div className={clsx(
             'flex items-center gap-1.5 text-xs font-mono px-3 py-1.5 rounded-full border',
@@ -445,14 +444,6 @@ export default function DashboardPage() {
             {backendOnline === null ? 'Checking...' :
              backendOnline  ? 'Backend Online' : 'Backend Offline'}
           </div>
-
-          {state === 'idle' && file && (
-            <button onClick={() => setShowConfig(!showConfig)}
-              className={clsx('glow-border bg-cv-card px-3 py-1.5 rounded-xl text-sm flex items-center gap-2 transition-colors',
-                showConfig ? 'text-cv-accent' : 'text-cv-sub hover:text-cv-text')}>
-              <Settings2 size={14} /> Settings
-            </button>
-          )}
 
           {state === 'done' && (
             <button onClick={handleReset}
@@ -510,14 +501,6 @@ export default function DashboardPage() {
                     </>
                   )}
 
-                  <AnimatePresence>
-                    {showConfig && file && (
-                      <motion.div>
-                        <SettingsPanel config={config} onChange={setSetting} onClose={() => setShowConfig(false)} />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
                   {file && (
                     <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                       onClick={handleStart}
@@ -561,7 +544,6 @@ export default function DashboardPage() {
                   <ResultsPanel
                     result={result} jobId={jobId}
                     glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
-                    onThreshold={setSetting}
                   />
                 </motion.div>
               )}
@@ -584,10 +566,34 @@ export default function DashboardPage() {
             </AnimatePresence>
           </div>
 
-          {/* Sidebar — 1/3 width */}
-          <div className="space-y-4">
+          {/* Sidebar — 1/3 width: settings before analysis, analytics after, so no scrolling */}
+          <div className="space-y-4 md:sticky md:top-20 md:self-start md:max-h-[calc(100vh-6rem)] md:overflow-y-auto">
+            {(state === 'idle' || state === 'uploading' || state === 'error') && (
+              <SettingsPanel config={config} onChange={setSetting} />
+            )}
+
+            {state === 'done' && result && (
+              <>
+                <ThresholdValues
+                  glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
+                />
+                <SummaryCards
+                  compact
+                  viewers={result.viewers ?? []}
+                  glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
+                  durationSec={result.stats?.duration_sec ?? 0}
+                  ignored={result.stats?.ignored ?? 0}
+                />
+              </>
+            )}
+
+            <details className="glow-border bg-cv-card rounded-2xl p-5 group">
+              <summary className="text-xs font-mono text-cv-sub tracking-wider cursor-pointer select-none">
+                PIPELINE &amp; TIPS
+              </summary>
+              <div className="mt-4 space-y-4">
             {/* Pipeline steps */}
-            <div className="glow-border bg-cv-card rounded-2xl p-5">
+            <div>
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">PIPELINE</p>
               {[
                 { n:'01', label:'Person + Pose Detection', color:'bg-cv-accent', done: ['processing','done'].includes(state) },
@@ -612,7 +618,7 @@ export default function DashboardPage() {
             </div>
 
             {/* What you'll get */}
-            <div className="glow-border bg-cv-card rounded-2xl p-5">
+            <div>
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">YOU WILL GET</p>
               {[
                 { e:'🎬', l:'Annotated video (MP4)'   },
@@ -629,14 +635,14 @@ export default function DashboardPage() {
             </div>
 
             {/* Tips */}
-            <div className="glow-border bg-cv-card rounded-2xl p-5">
+            <div>
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">TIPS</p>
               {[
                 'Mount the camera at the display, at head height, facing visitors',
                 'People far away or turned away are not counted',
                 'Keep videos under 100 MB for fast processing',
                 'Thresholds can be changed after processing',
-                'Download ZIP before refreshing the page',
+                'Every analysis is saved on the Jobs page',
               ].map(t => (
                 <div key={t} className="flex items-start gap-2 mb-3">
                   <Zap size={12} className="text-cv-accent mt-0.5 flex-shrink-0" />
@@ -644,6 +650,8 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+              </div>
+            </details>
           </div>
         </div>
       </div>

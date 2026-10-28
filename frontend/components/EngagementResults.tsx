@@ -38,18 +38,14 @@ export function summarize(viewers: Viewer[], glance: number, engage: number, str
   };
 }
 
-/* Counts, summary text and per-viewer table. Viewers are re-classified here
-   from the raw attention times, so changing the thresholds updates instantly. */
-export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, durationSec, ignored, csvUrl, jsonUrl, imageBase }: {
-  viewers: Viewer[];
-  glanceSec: number;
-  engageSec: number;
-  strongSec: number;
+type Thresholds = { viewers: Viewer[]; glanceSec: number; engageSec: number; strongSec: number };
+
+/* Counts and summary text. Viewers are re-classified from the raw attention
+   times, so changing the thresholds updates instantly. */
+export function SummaryCards({ viewers, glanceSec, engageSec, strongSec, durationSec, ignored, compact }: Thresholds & {
   durationSec: number;
   ignored: number;
-  csvUrl?: string;
-  jsonUrl?: string;    // engaged.json
-  imageBase?: string;  // prefix for snapshot paths, e.g. http://host/api/file/<job>/
+  compact?: boolean;   // two cards per row, for a narrow column
 }) {
   const s = summarize(viewers, glanceSec, engageSec, strongSec);
   const interested = s.engaged + s.strong;
@@ -63,7 +59,7 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className={clsx('grid grid-cols-2 gap-3', !compact && 'lg:grid-cols-4')}>
         {cards.map(({ icon: Icon, label, value, color }) => (
           <div key={label} className="glow-border bg-cv-card rounded-2xl p-4">
             <Icon size={15} className={clsx(color, 'mb-2')} />
@@ -90,7 +86,17 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
           video and comes back may be counted again.
         </p>
       </div>
+    </div>
+  );
+}
 
+/* Per-viewer table with snapshots and the CSV / JSON links. */
+export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl, jsonUrl, imageBase }: Thresholds & {
+  csvUrl?: string;
+  jsonUrl?: string;    // engaged.json
+  imageBase?: string;  // prefix for snapshot paths, e.g. http://host/api/file/<job>/
+}) {
+  return (
       <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
         <div className="px-5 py-3 border-b border-cv-border flex items-center gap-2">
           <FileText size={15} className="text-cv-cyan" />
@@ -155,6 +161,21 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
           </table>
         </div>
       </div>
+  );
+}
+
+/* Both together (used by the jobs side panel). */
+export function EngagementResults(p: Thresholds & {
+  durationSec: number;
+  ignored: number;
+  csvUrl?: string;
+  jsonUrl?: string;
+  imageBase?: string;
+}) {
+  return (
+    <div className="space-y-4">
+      <SummaryCards {...p} />
+      <ViewersTable {...p} />
     </div>
   );
 }

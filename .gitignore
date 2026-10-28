@@ -39,3 +39,6 @@ crowdvision_output/
 # Downloaded model weights (fetched automatically by ultralytics)
 backend/yolov8n-pose.pt
 backend/yolov8m.pt
+
+# Playwright MCP test artifacts
+.playwright-mcp/

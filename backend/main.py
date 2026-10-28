@@ -8,6 +8,8 @@ Routes:
   POST /api/analyze          – Upload video, start job, return job_id
   GET  /api/status/{job_id}  – Poll job status (JSON)
   GET  /api/stream/{job_id}  – SSE stream of live frame data
+  GET  /api/jobs             – List all jobs (one row per uploaded video)
+  DELETE /api/jobs/{job_id}  – Delete a job and its files
   GET  /api/download/{job_id}/{file} – Download results
   GET  /health               – Health check
 """
@@ -56,6 +58,32 @@ jobs = JobStore()
 # Output base directory
 OUTPUT_BASE = Path(os.environ.get("OUTPUT_DIR", "/tmp/crowdvision_output"))
 OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
+
+# Fields kept in <job_dir>/job.json so past jobs survive a restart
+_PERSIST_SKIP = {"preview_frame", "frame_data"}
+
+
+def _save_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return
+    data = {k: v for k, v in job.items() if k not in _PERSIST_SKIP}
+    (Path(job["job_dir"]) / "job.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _load_jobs():
+    """Reload finished jobs from disk; a job that was mid-run at shutdown is marked as failed."""
+    for meta in OUTPUT_BASE.glob("*/job.json"):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            if data.get("status") not in ("done", "error"):
+                data["status"], data["error"] = "error", "Interrupted by a server restart"
+            jobs.create(meta.parent.name, data)
+        except Exception:
+            continue
+
+
+_load_jobs()
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -150,6 +178,46 @@ async def run_processing(job_id: str, video_path: str, job_dir: Path, config: di
         )
     except Exception as e:
         jobs.update(job_id, {"status": "error", "error": str(e)})
+    _save_job(job_id)
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    """One summary row per uploaded video, newest first."""
+    rows = []
+    for job_id, job in jobs.all().items():
+        viewers = job.get("viewers") or []
+        stats = job.get("stats") or {}
+        rows.append({
+            "job_id":       job_id,
+            "filename":     job.get("filename", "video"),
+            "created_at":   job.get("created_at", 0),
+            "status":       job.get("status", "queued"),
+            "progress":     job.get("progress", 0),
+            "file_mb":      job.get("file_mb", 0),
+            "duration_sec": stats.get("duration_sec"),
+            "viewers":      len(viewers),
+            "engaged":      sum(1 for v in viewers if v.get("behaviour") == "engaged"),
+            "strong":       sum(1 for v in viewers if v.get("behaviour") == "strong"),
+            "error":        job.get("error"),
+        })
+    rows.sort(key=lambda r: r["created_at"], reverse=True)
+    return rows
+
+
+@app.delete("/api/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Remove a job record and every file it produced."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    if job.get("status") in ("queued", "processing"):
+        raise HTTPException(409, detail="Job is still processing")
+    job_dir = Path(job["job_dir"]).resolve()
+    if OUTPUT_BASE.resolve() in job_dir.parents:
+        shutil.rmtree(job_dir, ignore_errors=True)
+    jobs.delete(job_id)
+    return {"deleted": job_id}
 
 
 @app.get("/api/status/{job_id}")
@@ -322,6 +390,8 @@ def _build_response(job_id: str, job: dict) -> dict:
         "frame_data":        job.get("frame_data"),
         "preview_frame":     job.get("preview_frame"),
         "error":             job.get("error"),
+        "filename":          job.get("filename"),
+        "created_at":        job.get("created_at"),
     }
 
     if job.get("status") == "done":
