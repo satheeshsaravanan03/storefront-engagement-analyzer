@@ -95,6 +95,31 @@ def is_facing(kp: np.ndarray, kc: np.ndarray, kp_conf: float, max_offset: float)
     return abs(kp[NOSE][0] - mid_x) / eye_dist <= max_offset
 
 
+_FACE_CASCADE = None
+
+
+def has_frontal_face(frame: np.ndarray, kp: np.ndarray) -> bool:
+    """
+    Confirm with a real frontal-face detector (OpenCV's bundled Haar cascade) on
+    the head region. Pose models sometimes place eye/nose keypoints on the back
+    of a head; the cascade only fires for faces turned toward the camera.
+    """
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    eye_dist = abs(kp[R_EYE][0] - kp[L_EYE][0])
+    cx = (kp[L_EYE][0] + kp[R_EYE][0]) / 2.0
+    cy = (kp[L_EYE][1] + kp[R_EYE][1]) / 2.0 + eye_dist * 0.45
+    half = eye_dist * 1.6
+    x1, y1 = int(max(cx - half, 0)), int(max(cy - half, 0))
+    x2, y2 = int(min(cx + half, frame.shape[1])), int(min(cy + half, frame.shape[0]))
+    if x2 - x1 < 24 or y2 - y1 < 24:
+        return False
+    gray = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+    return len(faces) > 0
+
+
 # ── Per-person attention tracking ─────────────────────────────
 class AttentionTracker:
     """
@@ -180,8 +205,9 @@ def process_video_job(
         min_look_sec = float(config.get("min_look_sec", 1))     # shorter looks are not counted as viewers
         grace_sec    = float(config.get("grace_sec", 0.7))
         near_ratio   = float(config.get("near_ratio", 0.30))    # box height / frame height
-        max_offset   = float(config.get("max_offset", 0.55))    # nose offset in eye-distances
-        kp_conf      = float(config.get("kp_conf", 0.50))
+        max_offset   = float(config.get("max_offset", 0.45))    # nose offset in eye-distances
+        require_face = bool(config.get("require_face", True))   # also confirm with a frontal-face detector
+        kp_conf      = float(config.get("kp_conf", 0.60))
         if not glance_sec <= engage_sec <= strong_sec:
             raise ValueError("Thresholds must satisfy glance <= engage <= strong")
         device = "0" if torch.cuda.is_available() else "cpu"
@@ -258,6 +284,8 @@ def process_video_job(
                     h = y2 - y1
                     near = h >= near_ratio * H
                     facing = near and is_facing(kp, kc, kp_conf, max_offset)
+                    if facing and require_face:
+                        facing = has_frontal_face(frame, kp)
                     tracker.update(int(tid), fid, near, facing, (x1 + x2) / 2.0, (y1 + y2) / 2.0, h)
                     people.append((int(tid), x1, y1, x2, y2, near, facing))
 
