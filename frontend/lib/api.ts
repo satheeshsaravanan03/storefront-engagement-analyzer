@@ -15,6 +15,7 @@ export interface Viewer {
   looks: number;             // separate looks (gaps longer than the tolerance start a new one)
   speed: number;             // box-heights per second; low = standing still
   behaviour: Behaviour;      // classified with the thresholds used at processing time
+  image?: string;            // snapshot path (engaged / strong viewers only), relative to the job folder
 }
 
 export interface AnalysisResult {
@@ -35,9 +36,11 @@ export interface AnalysisResult {
     strong_sec: number;
     min_look_sec: number;
     ignored: number;         // people near the camera who never looked long enough
+    captured?: number;       // snapshots saved
   };
   viewers?: Viewer[];
   viewers_url?: string;       // CSV download URL
+  engaged_json_url?: string;  // engaged.json (engaged + strong viewers with snapshot paths)
   annotated_video_url?: string;
   // Live frame (base64 JPEG) during processing
   preview_frame?: string;

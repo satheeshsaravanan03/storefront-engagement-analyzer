@@ -40,7 +40,7 @@ export function summarize(viewers: Viewer[], glance: number, engage: number, str
 
 /* Counts, summary text and per-viewer table. Viewers are re-classified here
    from the raw attention times, so changing the thresholds updates instantly. */
-export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, durationSec, ignored, csvUrl }: {
+export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, durationSec, ignored, csvUrl, jsonUrl, imageBase }: {
   viewers: Viewer[];
   glanceSec: number;
   engageSec: number;
@@ -48,6 +48,8 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
   durationSec: number;
   ignored: number;
   csvUrl?: string;
+  jsonUrl?: string;    // engaged.json
+  imageBase?: string;  // prefix for snapshot paths, e.g. http://host/api/file/<job>/
 }) {
   const s = summarize(viewers, glanceSec, engageSec, strongSec);
   const interested = s.engaged + s.strong;
@@ -93,18 +95,27 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
         <div className="px-5 py-3 border-b border-cv-border flex items-center gap-2">
           <FileText size={15} className="text-cv-cyan" />
           <span className="font-semibold text-cv-text text-sm">Viewers</span>
-          {csvUrl && (
-            <a href={csvUrl} download
-              className="ml-auto flex items-center gap-1.5 text-cv-accent hover:text-cv-accentL text-xs font-mono transition-colors">
-              <Download size={12} /> viewers.csv
-            </a>
-          )}
+          <div className="ml-auto flex items-center gap-4">
+            {jsonUrl && (
+              <a href={jsonUrl} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-cv-accent hover:text-cv-accentL text-xs font-mono transition-colors">
+                <Download size={12} /> engaged.json
+              </a>
+            )}
+            {csvUrl && (
+              <a href={csvUrl} download
+                className="flex items-center gap-1.5 text-cv-accent hover:text-cv-accentL text-xs font-mono transition-colors">
+                <Download size={12} /> viewers.csv
+              </a>
+            )}
+          </div>
         </div>
         <div className="max-h-96 overflow-y-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-cv-card text-cv-sub text-xs font-mono">
               <tr className="border-b border-cv-border">
                 <th className="text-left px-5 py-2 font-normal">ID</th>
+                <th className="text-left px-3 py-2 font-normal">Snapshot</th>
                 <th className="text-right px-3 py-2 font-normal">First seen</th>
                 <th className="text-right px-3 py-2 font-normal">Near camera</th>
                 <th className="text-right px-3 py-2 font-normal">Attention</th>
@@ -118,6 +129,15 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
                 return (
                   <tr key={v.person_id} className="border-b border-cv-border/50 text-cv-text">
                     <td className="px-5 py-2 font-mono">#{v.person_id}</td>
+                    <td className="px-3 py-2">
+                      {v.image && imageBase ? (
+                        <a href={imageBase + v.image} target="_blank" rel="noopener noreferrer">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={imageBase + v.image} alt={`Viewer ${v.person_id}`}
+                            className="h-12 w-9 object-cover rounded border border-cv-border" />
+                        </a>
+                      ) : <span className="text-cv-sub text-xs">-</span>}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono">{v.first_sec.toFixed(1)}s</td>
                     <td className="px-3 py-2 text-right font-mono">{v.present_sec.toFixed(1)}s</td>
                     <td className="px-3 py-2 text-right font-mono font-bold">{v.attention_sec.toFixed(1)}s</td>
@@ -129,7 +149,7 @@ export function EngagementResults({ viewers, glanceSec, engageSec, strongSec, du
                 );
               })}
               {viewers.length === 0 && (
-                <tr><td colSpan={6} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
+                <tr><td colSpan={7} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
               )}
             </tbody>
           </table>

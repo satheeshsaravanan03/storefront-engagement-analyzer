@@ -292,14 +292,15 @@ async def download_file(job_id: str, file_type: str, request: Request):
         })
 
 
-@app.get("/api/file/{job_id}/{filename}")
+@app.get("/api/file/{job_id}/{filename:path}")
 async def get_named_file(job_id: str, filename: str):
-    """Serve any named file from job directory (for CSV downloads)."""
+    """Serve a file from the job directory (CSV, JSON, captured snapshots)."""
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
-    path = Path(job["job_dir"]) / Path(filename).name
-    if not path.exists():
+    job_dir = Path(job["job_dir"]).resolve()
+    path = (job_dir / filename).resolve()
+    if job_dir not in path.parents or not path.is_file():  # stay inside the job folder
         raise HTTPException(404, detail="File not found")
     return FileResponse(str(path))
 
@@ -328,6 +329,8 @@ def _build_response(job_id: str, job: dict) -> dict:
         resp["viewers"] = job.get("viewers")
         resp["annotated_video_url"] = f"{be_url}/api/download/{job_id}/video"
         resp["viewers_url"]         = f"{be_url}/api/file/{job_id}/viewers.csv"
+        if (job_dir / "captures" / "engaged.json").exists():
+            resp["engaged_json_url"] = f"{be_url}/api/file/{job_id}/captures/engaged.json"
 
     return resp
 
@@ -336,6 +339,9 @@ def _build_zip(job_id: str, job_dir: Path, video_name: str):
     """Create a ZIP of all result files."""
     zip_path = job_dir / "results.zip"
     files_to_include = ["annotated.mp4", "viewers.csv"]
+    cap_dir = job_dir / "captures"
+    if cap_dir.is_dir():
+        files_to_include += [f"captures/{f.name}" for f in sorted(cap_dir.iterdir()) if f.is_file()]
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for fname in files_to_include:
             fpath = job_dir / fname

@@ -352,6 +352,8 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onThresh
           durationSec={stats?.duration_sec ?? 0}
           ignored={stats?.ignored ?? 0}
           csvUrl={result.viewers_url}
+          jsonUrl={result.engaged_json_url}
+          imageBase={`${BACKEND}/api/file/${jobId}/`}
         />
       </motion.div>
     </div>

@@ -15,15 +15,19 @@ shared with the FastAPI main process.
 
 import base64
 import csv
+import json
 import threading
 import time
 import traceback
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
 import cv2
 import numpy as np
+
+from storage import get_storage
 
 
 # ── Job Store ─────────────────────────────────────────────────
@@ -184,6 +188,17 @@ def busy_with_object(objs, cands):
     return out
 
 
+def snapshot_score(frame: np.ndarray, box) -> float:
+    """Bigger and sharper is better: person height times a sharpness factor."""
+    x1, y1, x2, y2 = box
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return 0.0
+    small = cv2.resize(crop, (96, max(1, int(96 * crop.shape[0] / max(crop.shape[1], 1)))))
+    sharp = cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+    return (y2 - y1) * (50.0 + min(float(sharp), 500.0))
+
+
 # ── Per-person attention tracking ─────────────────────────────
 class AttentionTracker:
     """
@@ -276,6 +291,7 @@ def process_video_job(
         obj_conf     = float(config.get("obj_conf", 0.25))
         obj_every    = int(config.get("obj_every", 3))          # run the object detector every N frames
         busy_hold    = float(config.get("busy_hold_sec", 1.0))  # keep "busy" this long after an object is seen
+        capture      = bool(config.get("capture_images", True)) # save a snapshot of each engaged viewer
         if not glance_sec <= engage_sec <= strong_sec:
             raise ValueError("Thresholds must satisfy glance <= engage <= strong")
         device = "0" if torch.cuda.is_available() else "cpu"
@@ -286,6 +302,8 @@ def process_video_job(
         _ = model(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, device=device)
         obj_model = YOLO("yolov8m.pt") if ignore_busy else None
         busy: Dict[int, tuple] = {}   # track id -> (last fid it counts as busy, reason)
+        snaps: Dict[int, dict] = {}   # track id -> best snapshot so far
+        storage = get_storage(job_dir)
 
         # ── Open video ───────────────────────────────────────
         cap = cv2.VideoCapture(video_path)
@@ -382,6 +400,17 @@ def process_video_job(
                         facing, reason = False, busy[tid][1]
                     tracker.update(tid, fid, near, facing, (x1 + x2) / 2.0, (y1 + y2) / 2.0, h)
                     people.append((tid, x1, y1, x2, y2, near, facing, reason))
+                    if capture and facing:  # taken before any boxes are drawn on the frame
+                        sc = snapshot_score(frame, (x1, y1, x2, y2))
+                        best = snaps.get(tid)
+                        if best is None or sc > best["score"]:
+                            pad_x, pad_y = int((x2 - x1) * 0.05), int(h * 0.03)
+                            bx1, by1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
+                            bx2, by2 = min(W, x2 + pad_x), min(H, y2 + pad_y)
+                            snaps[tid] = {
+                                "score": sc, "img": frame[by1:by2, bx1:bx2].copy(),
+                                "sec": round(fid / FPS, 2), "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                            }
 
             viewers = [t for t, p in tracker.people.items() if p["attention"] >= min_look_sec]
             counts = {GLANCED: 0, LOOKED: 0, ENGAGED: 0, STRONG: 0}
@@ -451,7 +480,31 @@ def process_video_job(
                 "looks":            p["looks"],
                 "speed":            round(AttentionTracker.speed(p), 2),
                 "behaviour":        classify(p["attention"], glance_sec, engage_sec, strong_sec),
+                "image":            "",
             })
+
+        # Snapshot + JSON for engaged and strongly engaged viewers only
+        captured = []
+        if capture:
+            for v in viewers:
+                snap = snaps.get(v["person_id"])
+                if v["behaviour"] not in (ENGAGED, STRONG) or snap is None:
+                    continue
+                ok, jpg = cv2.imencode(".jpg", snap["img"], [cv2.IMWRITE_JPEG_QUALITY, 90])
+                if not ok:
+                    continue
+                v["image"] = storage.save(f"captures/person_{v['person_id']}.jpg", jpg.tobytes())
+                captured.append({**v, "snapshot_sec": snap["sec"], "bbox": snap["bbox"]})
+            doc = {
+                "job_id":       job_id,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source":       {"duration_sec": round(fid / max(FPS, 1), 1), "resolution": f"{W}x{H}",
+                                 "fps": round(FPS, 1)},
+                "thresholds":   {"glance_sec": glance_sec, "engage_sec": engage_sec,
+                                 "strong_sec": strong_sec, "min_look_sec": min_look_sec},
+                "engaged_viewers": captured,
+            }
+            storage.save("captures/engaged.json", json.dumps(doc, indent=2).encode("utf-8"))
 
         with open(Path(job_dir) / "viewers.csv", "w", newline="") as f:
             wr = csv.DictWriter(f, fieldnames=list(viewers[0].keys()) if viewers else ["person_id"])
@@ -473,6 +526,7 @@ def process_video_job(
                 "strong_sec":   strong_sec,
                 "min_look_sec": min_look_sec,
                 "ignored":      len(tracker.people) - len(viewers),
+                "captured":     len(captured),
             },
             "viewers": viewers,
         })
