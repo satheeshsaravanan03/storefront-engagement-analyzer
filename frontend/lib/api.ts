@@ -3,16 +3,18 @@
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-export interface Zone { x1: number; y1: number; x2: number; y2: number }  // ratios 0–1
+export type Behaviour = 'glanced' | 'looked' | 'engaged' | 'strong';
 
-export type Category = 'not_flagged' | 'potential' | 'strong';
-
-export interface Visit {
-  track_id: number;
-  entry_sec: number;
-  exit_sec: number;
-  dwell_sec: number;
-  category: Category;        // classified with the thresholds used at processing time
+export interface Viewer {
+  person_id: number;
+  first_sec: number;
+  last_sec: number;
+  present_sec: number;       // time near the camera
+  attention_sec: number;     // time near the camera AND facing it
+  longest_look_sec: number;
+  looks: number;             // separate looks (gaps longer than the tolerance start a new one)
+  speed: number;             // box-heights per second; low = standing still
+  behaviour: Behaviour;      // classified with the thresholds used at processing time
 }
 
 export interface AnalysisResult {
@@ -28,19 +30,22 @@ export interface AnalysisResult {
     resolution: string;
     source_fps: number;
     total_frames: number;
+    glance_sec: number;
     engage_sec: number;
     strong_sec: number;
+    min_look_sec: number;
+    ignored: number;         // people near the camera who never looked long enough
   };
-  visits?: Visit[];
-  visits_url?: string;        // CSV download URL
+  viewers?: Viewer[];
+  viewers_url?: string;       // CSV download URL
   annotated_video_url?: string;
   // Live frame (base64 JPEG) during processing
   preview_frame?: string;
   frame_data?: {
     time_sec: number;
-    in_zone_now: number;
-    visits: number;
-    potential: number;
+    looking_now: number;
+    viewers: number;
+    engaged: number;
     strong: number;
     fps: number;
   };
@@ -51,21 +56,23 @@ export interface AnalysisResult {
 export async function uploadVideo(
   file: File,
   config: {
-    zone: Zone;
     confidence?: number;
+    glance_sec?: number;
     engage_sec?: number;
     strong_sec?: number;
-    grace_sec?: number;
+    min_look_sec?: number;
+    near_ratio?: number;
   }
 ): Promise<{ job_id: string }> {
   const form = new FormData();
   form.append('video', file);
   form.append('config', JSON.stringify({
-    zone:       config.zone,
-    confidence: config.confidence ?? 0.40,
-    engage_sec: config.engage_sec ?? 5,
-    strong_sec: config.strong_sec ?? 10,
-    grace_sec:  config.grace_sec  ?? 1.5,
+    confidence:   config.confidence   ?? 0.40,
+    glance_sec:   config.glance_sec   ?? 2,
+    engage_sec:   config.engage_sec   ?? 5,
+    strong_sec:   config.strong_sec   ?? 10,
+    min_look_sec: config.min_look_sec ?? 1,
+    near_ratio:   config.near_ratio   ?? 0.30,
   }));
 
   const res = await fetch(`${BACKEND}/api/analyze`, {

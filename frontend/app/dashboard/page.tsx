@@ -8,8 +8,7 @@ import {
   Activity, Users, Clock, Camera, Zap,
   ChevronRight, Film,
 } from 'lucide-react';
-import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult, type Zone } from '@/lib/api';
-import { ZoneSelector } from '@/components/ZoneSelector';
+import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult } from '@/lib/api';
 import { EngagementResults } from '@/components/EngagementResults';
 import clsx from 'clsx';
 
@@ -68,8 +67,30 @@ function VideoPlayerInline({ src }: { src: string }) {
 }
 
 
+/* ── Local preview of the chosen file, before upload ───────── */
+function VideoPreview({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  if (!url) return null;
+  return (
+    <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
+      <video src={url} controls muted playsInline className="w-full bg-black" style={{ maxHeight: 420 }} />
+      <p className="px-4 py-2 text-cv-sub text-xs font-mono border-t border-cv-border">
+        Preview. Best results: camera at the display, facing the people who approach.
+      </p>
+    </div>
+  );
+}
+
 /* ── Settings slider panel ────────────────────────────────── */
-type Settings = { confidence: number; engage_sec: number; strong_sec: number; grace_sec: number };
+type Settings = {
+  confidence: number; glance_sec: number; engage_sec: number; strong_sec: number;
+  min_look_sec: number; near_ratio: number;
+};
 
 function SettingsPanel({ config, onChange, onClose }: {
   config: Settings;
@@ -77,10 +98,12 @@ function SettingsPanel({ config, onChange, onClose }: {
   onClose: () => void;
 }) {
   const sliders: { key: keyof Settings; label: string; min: number; max: number; step: number; hint?: string }[] = [
-    { key: 'engage_sec',  label: 'Potential engagement from (sec)', min: 1,   max: 30, step: 1,   hint: 'Dwell at or above this is flagged' },
-    { key: 'strong_sec',  label: 'Stronger signal from (sec)',      min: 2,   max: 60, step: 1,   hint: 'Dwell at or above this is a stronger signal' },
-    { key: 'grace_sec',   label: 'Gap tolerance (sec)',             min: 0,   max: 5,  step: 0.5, hint: 'Short gaps in tracking are bridged, not split into two visits' },
-    { key: 'confidence',  label: 'Detection confidence',            min: 0.2, max: 0.9, step: 0.05 },
+    { key: 'min_look_sec', label: 'Minimum look to count (sec)',      min: 0.5, max: 5,  step: 0.5, hint: 'Shorter looks are not counted as viewers' },
+    { key: 'glance_sec',   label: 'Stopped & looked from (sec)',      min: 1,   max: 10, step: 0.5, hint: 'Below this a look is only a glance' },
+    { key: 'engage_sec',   label: 'Engaged from (sec)',               min: 1,   max: 30, step: 1,   hint: 'Attention at or above this is potential engagement' },
+    { key: 'strong_sec',   label: 'Strongly engaged from (sec)',      min: 2,   max: 60, step: 1,   hint: 'Attention at or above this is a stronger signal' },
+    { key: 'near_ratio',   label: 'Nearness (person height / frame)', min: 0.1, max: 0.8, step: 0.05, hint: 'People smaller than this (far away) are ignored' },
+    { key: 'confidence',   label: 'Detection confidence',             min: 0.2, max: 0.9, step: 0.05 },
   ];
   return (
     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
@@ -140,13 +163,13 @@ function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?
         <div>
           <p className="text-cv-text font-semibold text-lg mb-1">Drop your video here</p>
           <p className="text-cv-sub text-sm">MP4 · AVI · MOV · MKV — up to 500 MB</p>
-          <p className="text-cv-sub text-xs mt-2 font-mono">Prerecorded footage from a single storefront camera</p>
+          <p className="text-cv-sub text-xs mt-2 font-mono">Prerecorded footage from a camera placed at the display</p>
         </div>
         <div className="flex items-center gap-6 text-xs text-cv-sub font-mono flex-wrap justify-center">
-          <span className="flex items-center gap-1.5"><Camera size={11} className="text-cv-accent" />YOLOv8 detection</span>
+          <span className="flex items-center gap-1.5"><Camera size={11} className="text-cv-accent" />YOLOv8 pose</span>
           <span className="flex items-center gap-1.5"><Activity size={11} className="text-cv-cyan" />ByteTrack IDs</span>
-          <span className="flex items-center gap-1.5"><Users size={11} className="text-cv-green" />Storefront zone</span>
-          <span className="flex items-center gap-1.5"><Clock size={11} className="text-cv-amber" />Dwell time</span>
+          <span className="flex items-center gap-1.5"><Users size={11} className="text-cv-green" />Facing the display</span>
+          <span className="flex items-center gap-1.5"><Clock size={11} className="text-cv-amber" />Attention time</span>
         </div>
       </motion.div>
     </div>
@@ -184,7 +207,7 @@ function LivePreview({ result }: { result: AnalysisResult }) {
         </div>
         <div className="flex justify-between mt-1.5 text-[11px] text-cv-sub font-mono">
           <span>{(result.fps ?? 0).toFixed(1)} FPS processing</span>
-          <span>{pct < 100 ? 'Running YOLOv8n + ByteTrack...' : 'Finalising...'}</span>
+          <span>{pct < 100 ? 'Running pose detection + ByteTrack...' : 'Finalising...'}</span>
         </div>
       </div>
 
@@ -221,10 +244,10 @@ function LivePreview({ result }: { result: AnalysisResult }) {
       {fd && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'Video time',     value: `${fd.time_sec.toFixed(1)}s`, color: 'text-cv-cyan'  },
-            { label: 'In zone now',    value: fd.in_zone_now,               color: 'text-cv-accent' },
-            { label: 'Tracked visits', value: fd.visits,                    color: 'text-cv-text'  },
-            { label: 'Potential / strong', value: `${fd.potential} / ${fd.strong}`, color: 'text-cv-amber' },
+            { label: 'Video time',       value: `${fd.time_sec.toFixed(1)}s`,   color: 'text-cv-cyan'   },
+            { label: 'Looking now',      value: fd.looking_now,                 color: 'text-cv-accent' },
+            { label: 'Viewers so far',   value: fd.viewers,                     color: 'text-cv-text'   },
+            { label: 'Engaged / strong', value: `${fd.engaged} / ${fd.strong}`, color: 'text-cv-amber'  },
           ].map(({ label, value, color }) => (
             <div key={label} className="glow-border bg-cv-card rounded-2xl p-4">
               <p className={clsx('font-display text-2xl', color)}>{value}</p>
@@ -238,12 +261,13 @@ function LivePreview({ result }: { result: AnalysisResult }) {
 }
 
 /* ── Full results panel (shown after processing completes) ─── */
-function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
+function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onThreshold }: {
   result: AnalysisResult;
   jobId: string;
+  glanceSec: number;
   engageSec: number;
   strongSec: number;
-  onThreshold: (k: 'engage_sec' | 'strong_sec', v: number) => void;
+  onThreshold: (k: 'glance_sec' | 'engage_sec' | 'strong_sec', v: number) => void;
 }) {
   const stats = result.stats;
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -271,13 +295,19 @@ function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
       <div className="glow-border bg-cv-card rounded-2xl p-4 flex items-center gap-4 flex-wrap">
         <span className="text-cv-sub text-xs font-mono">THRESHOLDS</span>
         <label className="flex items-center gap-2 text-sm text-cv-sub">
-          Potential from
-          <input type="number" min={1} max={strongSec} value={engageSec}
-            onChange={e => onThreshold('engage_sec', Math.max(1, parseFloat(e.target.value) || 1))}
+          Looked from
+          <input type="number" min={1} max={engageSec} value={glanceSec}
+            onChange={e => onThreshold('glance_sec', Math.max(1, parseFloat(e.target.value) || 1))}
             className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
         </label>
         <label className="flex items-center gap-2 text-sm text-cv-sub">
-          Stronger from
+          Engaged from
+          <input type="number" min={glanceSec} max={strongSec} value={engageSec}
+            onChange={e => onThreshold('engage_sec', Math.max(glanceSec, parseFloat(e.target.value) || glanceSec))}
+            className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
+        </label>
+        <label className="flex items-center gap-2 text-sm text-cv-sub">
+          Strong from
           <input type="number" min={engageSec} value={strongSec}
             onChange={e => onThreshold('strong_sec', Math.max(engageSec, parseFloat(e.target.value) || engageSec))}
             className="w-16 bg-cv-surface border border-cv-border rounded-lg px-2 py-1 text-cv-text font-mono text-sm" /> s
@@ -294,7 +324,7 @@ function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
             <Film size={15} className="text-cv-accent" />
             <span className="font-semibold text-cv-text text-sm">Annotated Output Video</span>
             <span className="text-cv-sub text-xs font-mono ml-auto">
-              Boxes · Track IDs · Live dwell · Storefront zone
+              Boxes · Track IDs · Live attention time
             </span>
           </div>
 
@@ -315,11 +345,13 @@ function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
         <EngagementResults
-          visits={result.visits ?? []}
+          viewers={result.viewers ?? []}
+          glanceSec={glanceSec}
           engageSec={engageSec}
           strongSec={strongSec}
           durationSec={stats?.duration_sec ?? 0}
-          csvUrl={result.visits_url}
+          ignored={stats?.ignored ?? 0}
+          csvUrl={result.viewers_url}
         />
       </motion.div>
     </div>
@@ -329,7 +361,6 @@ function ResultsPanel({ result, jobId, engageSec, strongSec, onThreshold }: {
 /* ── Main dashboard page ──────────────────────────────────── */
 export default function DashboardPage() {
   const [file, setFile]               = useState<File | null>(null);
-  const [zone, setZone]               = useState<Zone | null>(null);
   const [jobId, setJobId]             = useState<string | null>(null);
   const [result, setResult]           = useState<AnalysisResult | null>(null);
   const [state, setState]             = useState<'idle'|'uploading'|'processing'|'done'|'error'>('idle');
@@ -337,31 +368,32 @@ export default function DashboardPage() {
   const [showConfig, setShowConfig]   = useState(false);
   const [backendOnline, setBackend]   = useState<boolean | null>(null);
   const [config, setConfig]           = useState<Settings>({
-    confidence: 0.40, engage_sec: 5, strong_sec: 10, grace_sec: 1.5,
+    confidence: 0.40, glance_sec: 2, engage_sec: 5, strong_sec: 10, min_look_sec: 1, near_ratio: 0.30,
   });
   const stopStream = useRef<(()=>void)|null>(null);
 
   useEffect(() => { checkBackendHealth().then(setBackend); }, []);
 
-  // Keep strong >= engage whichever one the user moves
+  // Keep glance <= engage <= strong whichever one the user moves
   const setSetting = useCallback((k: keyof Settings, v: number) => {
     setConfig(p => {
       const next = { ...p, [k]: v };
-      if (k === 'engage_sec' && next.strong_sec < v) next.strong_sec = v;
-      if (k === 'strong_sec' && next.engage_sec > v) next.engage_sec = v;
+      if (k === 'glance_sec') { next.engage_sec = Math.max(next.engage_sec, v); next.strong_sec = Math.max(next.strong_sec, next.engage_sec); }
+      if (k === 'engage_sec') { next.glance_sec = Math.min(next.glance_sec, v); next.strong_sec = Math.max(next.strong_sec, v); }
+      if (k === 'strong_sec') { next.engage_sec = Math.min(next.engage_sec, v); next.glance_sec = Math.min(next.glance_sec, next.engage_sec); }
       return next;
     });
   }, []);
 
   const handleFile = useCallback((f: File) => {
-    setFile(f); setZone(null); setResult(null); setState('idle'); setError(null);
+    setFile(f); setResult(null); setState('idle'); setError(null);
   }, []);
 
   const handleStart = async () => {
-    if (!file || !zone) return;
+    if (!file) return;
     setState('uploading'); setError(null);
     try {
-      const { job_id } = await uploadVideo(file, { ...config, zone });
+      const { job_id } = await uploadVideo(file, config);
       setJobId(job_id); setState('processing');
       stopStream.current = streamJobUpdates(
         job_id,
@@ -377,11 +409,11 @@ export default function DashboardPage() {
 
   const handleReset = () => {
     stopStream.current?.();
-    setFile(null); setZone(null); setJobId(null); setResult(null);
+    setFile(null); setJobId(null); setResult(null);
     setState('idle'); setError(null);
   };
 
-  const canStart = !!file && !!zone && !!backendOnline && state !== 'uploading';
+  const canStart = !!file && !!backendOnline && state !== 'uploading';
 
   return (
     <div className="noise mesh-bg min-h-screen">
@@ -435,15 +467,15 @@ export default function DashboardPage() {
           <h1 className="font-display text-4xl text-cv-text mb-2">
             {state === 'done' ? 'Analysis Complete' :
              state === 'processing' ? 'Processing...' :
-             'Storefront Engagement Analysis'}
+             'Visitor Attention Analysis'}
           </h1>
           <p className="text-cv-sub">
             {state === 'idle'       && (file
-              ? 'Mark the area in front of the store on the video, then start the analysis.'
-              : 'Upload a prerecorded storefront video to measure how long people stay near the shop.')}
+              ? 'Check the preview, adjust settings if needed, then start the analysis.'
+              : 'Upload a prerecorded video from a camera at your product or advertisement to see who looked at it, and for how long.')}
             {state === 'uploading'  && 'Uploading your video to the backend...'}
-            {state === 'processing' && 'YOLOv8n + ByteTrack running frame by frame. Preview updates live.'}
-            {state === 'done'       && 'Visits, engagement counts, the annotated video and CSV are ready below.'}
+            {state === 'processing' && 'Pose detection + ByteTrack running frame by frame. Preview updates live.'}
+            {state === 'done'       && 'Viewers, attention times, behaviour, the annotated video and CSV are ready below.'}
             {state === 'error'      && 'Something went wrong. See error details below.'}
           </p>
         </motion.div>
@@ -472,7 +504,7 @@ export default function DashboardPage() {
                         <button onClick={handleReset} className="text-cv-sub hover:text-cv-red transition-colors"><X size={16} /></button>
                       </div>
 
-                      <ZoneSelector file={file} zone={zone} onChange={setZone} />
+                      <VideoPreview file={file} />
                     </>
                   )}
 
@@ -497,7 +529,7 @@ export default function DashboardPage() {
                     >
                       {state === 'uploading'
                         ? <><Loader2 size={18} className="animate-spin" /> Uploading...</>
-                        : <><Play size={18} fill="currentColor" /> {zone ? 'Start Analysis' : 'Draw the storefront zone to start'}</>
+                        : <><Play size={18} fill="currentColor" /> Start Analysis</>
                       }
                     </motion.button>
                   )}
@@ -526,7 +558,7 @@ export default function DashboardPage() {
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                   <ResultsPanel
                     result={result} jobId={jobId}
-                    engageSec={config.engage_sec} strongSec={config.strong_sec}
+                    glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
                     onThreshold={setSetting}
                   />
                 </motion.div>
@@ -556,11 +588,11 @@ export default function DashboardPage() {
             <div className="glow-border bg-cv-card rounded-2xl p-5">
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">PIPELINE</p>
               {[
-                { n:'01', label:'YOLOv8n Detection',   color:'bg-cv-accent', done: ['processing','done'].includes(state) },
-                { n:'02', label:'ByteTrack IDs',        color:'bg-cv-cyan',   done: ['processing','done'].includes(state) },
-                { n:'03', label:'Storefront Zone Test', color:'bg-cv-green',  done: ['processing','done'].includes(state) },
-                { n:'04', label:'Dwell Time',           color:'bg-cv-amber',  done: state === 'done' },
-                { n:'05', label:'Engagement Classes',   color:'bg-purple-500', done: state === 'done' },
+                { n:'01', label:'Person + Pose Detection', color:'bg-cv-accent', done: ['processing','done'].includes(state) },
+                { n:'02', label:'ByteTrack IDs',           color:'bg-cv-cyan',   done: ['processing','done'].includes(state) },
+                { n:'03', label:'Near + Facing Test',      color:'bg-cv-green',  done: ['processing','done'].includes(state) },
+                { n:'04', label:'Attention Time',          color:'bg-cv-amber',  done: state === 'done' },
+                { n:'05', label:'Behaviour Labels',        color:'bg-purple-500', done: state === 'done' },
               ].map(({ n, label, color, done }) => (
                 <div key={n} className="flex items-center gap-3 mb-3">
                   <div className={clsx(
@@ -582,9 +614,9 @@ export default function DashboardPage() {
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">YOU WILL GET</p>
               {[
                 { e:'🎬', l:'Annotated video (MP4)'   },
-                { e:'👣', l:'Tracked visits + dwell'  },
-                { e:'🎯', l:'Engagement classes'      },
-                { e:'📋', l:'visits.csv'              },
+                { e:'👀', l:'Viewers + attention time' },
+                { e:'🎯', l:'Behaviour labels'         },
+                { e:'📋', l:'viewers.csv'              },
                 { e:'📦', l:'All files as ZIP'        },
               ].map(({ e, l }) => (
                 <div key={l} className="flex items-center gap-2 mb-2 text-sm text-cv-sub">
@@ -598,7 +630,8 @@ export default function DashboardPage() {
             <div className="glow-border bg-cv-card rounded-2xl p-5">
               <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">TIPS</p>
               {[
-                'Draw the zone on the floor area in front of the shop',
+                'Mount the camera at the display, at head height, facing visitors',
+                'People far away or turned away are not counted',
                 'Keep videos under 100 MB for fast processing',
                 'Thresholds can be changed after processing',
                 'Download ZIP before refreshing the page',

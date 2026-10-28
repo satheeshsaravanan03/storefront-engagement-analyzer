@@ -1,7 +1,7 @@
 """
 Storefront Engagement FastAPI Backend
 =====================================
-Exposes the YOLOv8 + ByteTrack storefront dwell-time pipeline as a REST API
+Exposes the YOLOv8-pose + ByteTrack visitor attention pipeline as a REST API
 with Server-Sent Events (SSE) for real-time progress streaming.
 
 Routes:
@@ -38,7 +38,7 @@ from processor import process_video_job, JobStore
 # ── App setup ─────────────────────────────────────────────────
 app = FastAPI(
     title="Storefront Engagement API",
-    description="Storefront dwell-time analysis for prerecorded video",
+    description="Visitor attention analysis for prerecorded video",
     version="2.0.0",
 )
 
@@ -104,10 +104,6 @@ async def analyze_video(
         cfg = json.loads(config)
     except Exception:
         cfg = {}
-
-    zone = cfg.get("zone")
-    if not isinstance(zone, dict) or not all(k in zone for k in ("x1", "y1", "x2", "y2")):
-        raise HTTPException(400, detail="A storefront zone (x1, y1, x2, y2) is required")
 
     # Create job
     job_id = str(uuid.uuid4())[:8]
@@ -240,7 +236,7 @@ async def download_file(job_id: str, file_type: str, request: Request):
 
     file_map = {
         "video":   (job_dir / "annotated.mp4",  "video/mp4"),
-        "csv":     (job_dir / "visits.csv",      "text/csv"),
+        "csv":     (job_dir / "viewers.csv",      "text/csv"),
     }
     item = file_map.get(file_type)
     if not item:
@@ -329,9 +325,9 @@ def _build_response(job_id: str, job: dict) -> dict:
 
     if job.get("status") == "done":
         resp["stats"]  = job.get("stats")
-        resp["visits"] = job.get("visits")
+        resp["viewers"] = job.get("viewers")
         resp["annotated_video_url"] = f"{be_url}/api/download/{job_id}/video"
-        resp["visits_url"]          = f"{be_url}/api/file/{job_id}/visits.csv"
+        resp["viewers_url"]         = f"{be_url}/api/file/{job_id}/viewers.csv"
 
     return resp
 
@@ -339,7 +335,7 @@ def _build_response(job_id: str, job: dict) -> dict:
 def _build_zip(job_id: str, job_dir: Path, video_name: str):
     """Create a ZIP of all result files."""
     zip_path = job_dir / "results.zip"
-    files_to_include = ["annotated.mp4", "visits.csv"]
+    files_to_include = ["annotated.mp4", "viewers.csv"]
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for fname in files_to_include:
             fpath = job_dir / fname
