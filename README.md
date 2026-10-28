@@ -1,33 +1,4 @@
-<div align="center">
-<img src="https://img.shields.io/badge/YOLOv8n-Detection-6C63FF?style=for-the-badge&logo=python&logoColor=white" />
-<img src="https://img.shields.io/badge/ByteTrack-Tracking-06B6D4?style=for-the-badge&logo=python&logoColor=white" />
-<img src="https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white" />
-<img src="https://img.shields.io/badge/Next.js_14-Frontend-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" />
-<img src="https://img.shields.io/badge/Vercel-Deployed-black?style=for-the-badge&logo=vercel&logoColor=white" />
-<img src="https://img.shields.io/badge/Railway-Backend-0B0D0E?style=for-the-badge&logo=railway&logoColor=white" />
 
-<br/><br/>
-
-# 👁️ CrowdVision
-
-### Real-Time People Counting & Queue Management System
-
-## 🎥 Demo Video
-
-![demo](https://github.com/user-attachments/assets/4f4272eb-12e1-4131-93d3-3a1bf3a3942f)
-
-
-> Upload any CCTV video → Get AI-powered people counting, queue analytics,
-> dwell time estimation, density heatmap, and smart email alerts — all in your browser.
-
-<br/>
-<!--
-[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-Visit_Now-6C63FF?style=for-the-badge)](https://crowdvision.vercel.app)
-[![Colab](https://img.shields.io/badge/Open_in-Colab-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white)](https://colab.research.google.com)
--->
-</div>
-
----
 
 ## 📌 About The Project
 
