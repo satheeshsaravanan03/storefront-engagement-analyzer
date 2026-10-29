@@ -34,8 +34,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+def _load_env_file():
+    """Read backend/.env into os.environ (real environment variables win)."""
+    path = Path(__file__).with_name(".env")
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env_file()
+
 # Import the processing pipeline
 from processor import process_video_job, JobStore
+import serp
 
 # ── App setup ─────────────────────────────────────────────────
 app = FastAPI(
@@ -218,6 +233,45 @@ async def delete_job(job_id: str):
         shutil.rmtree(job_dir, ignore_errors=True)
     jobs.delete(job_id)
     return {"deleted": job_id}
+
+
+@app.post("/api/jobs/{job_id}/lookup/{person_id}")
+async def lookup_person(job_id: str, person_id: int):
+    """Run a SerpAPI Google Lens search on one captured snapshot and cache the result."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    job_dir = Path(job["job_dir"])
+    if not (job_dir / "captures" / f"person_{person_id}.jpg").is_file():
+        raise HTTPException(404, detail="No snapshot for that person")
+
+    be_url = (os.environ.get("PUBLIC_URL") or os.environ.get("BACKEND_URL", "http://localhost:8000")).rstrip("/")
+    if "localhost" in be_url or "127.0.0.1" in be_url:
+        raise HTTPException(400, detail="Set PUBLIC_URL to a public tunnel/server URL so SerpAPI can fetch the snapshot")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, serp.lens_lookup, f"{be_url}/api/file/{job_id}/captures/person_{person_id}.jpg")
+    except serp.SerpError as e:
+        raise HTTPException(502, detail=str(e))
+
+    out_dir = job_dir / "lookups"
+    out_dir.mkdir(exist_ok=True)
+    (out_dir / f"person_{person_id}.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
+
+
+@app.get("/api/jobs/{job_id}/lookup/{person_id}")
+async def get_lookup(job_id: str, person_id: int):
+    """Return the cached SerpAPI result for a snapshot, if one was run."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    path = Path(job["job_dir"]) / "lookups" / f"person_{person_id}.json"
+    if not path.is_file():
+        raise HTTPException(404, detail="No lookup yet")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @app.get("/api/status/{job_id}")

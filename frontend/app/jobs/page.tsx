@@ -112,6 +112,7 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
                 csvUrl={detail.viewers_url}
                 jsonUrl={detail.engaged_json_url}
                 imageBase={`${BACKEND}/api/file/${job.job_id}/`}
+                jobId={job.job_id}
               />
             </>
           )}

@@ -1,8 +1,10 @@
 'use client';
 
-import { Clock, Users, TrendingUp, Zap, FileText, Download } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { Clock, Users, TrendingUp, Zap, FileText, Download, Search, Loader2, ExternalLink, X } from 'lucide-react';
 import clsx from 'clsx';
-import type { Behaviour, Viewer } from '@/lib/api';
+import { getLookup, runLookup } from '@/lib/api';
+import type { Behaviour, LensResult, Viewer } from '@/lib/api';
 
 export function classify(attention: number, glance: number, engage: number, strong: number): Behaviour {
   if (attention >= strong) return 'strong';
@@ -90,12 +92,90 @@ export function SummaryCards({ viewers, glanceSec, engageSec, strongSec, duratio
   );
 }
 
+function hostOf(url?: string) {
+  try { return url ? new URL(url).hostname.replace(/^www\./, '') : ''; } catch { return ''; }
+}
+
+/* Detail panel shown under a viewer row: their snapshot beside a grid of Google Lens matches. */
+function LookupPanel({ personId, image, state, onClose }: {
+  personId: number;
+  image?: string;
+  state: { busy: boolean; error: string; result: LensResult | null };
+  onClose: () => void;
+}) {
+  const { busy, error, result } = state;
+  const matches = result?.visual_matches ?? [];
+  return (
+    <div className="bg-cv-bg/40 px-5 py-4">
+      <div className="flex items-center gap-3 mb-3">
+        {image && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={image} alt={`Viewer ${personId}`} className="h-14 w-10 object-cover rounded border border-cv-border" />
+        )}
+        <div className="min-w-0">
+          <p className="text-cv-text text-sm font-semibold">Matches for #{personId}</p>
+          <p className="text-cv-sub text-xs font-mono">
+            {busy ? 'Searching…' : result ? `${matches.length} visual match${matches.length === 1 ? '' : 'es'}` : ''}
+          </p>
+        </div>
+        <div className="ml-auto flex items-center gap-3">
+          {result?.search_url && (
+            <a href={result.search_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1 text-cv-accent hover:text-cv-accentL text-xs font-mono">
+              <ExternalLink size={12} /> Google Lens
+            </a>
+          )}
+          <button onClick={onClose} aria-label="Close" className="text-cv-sub hover:text-cv-text"><X size={14} /></button>
+        </div>
+      </div>
+
+      {busy && <div className="flex items-center gap-2 text-cv-sub text-xs font-mono py-3"><Loader2 size={14} className="animate-spin" /> Searching…</div>}
+      {error && <p className="text-red-400 text-xs">{error}</p>}
+      {result && matches.length === 0 && <p className="text-cv-sub text-xs">No matches found.</p>}
+
+      <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
+        {matches.slice(0, 10).map((m, i) => (
+          <a key={i} href={m.link} target="_blank" rel="noopener noreferrer"
+            className="flex gap-3 p-2 rounded-xl border border-cv-border bg-cv-card hover:border-cv-accent transition-colors">
+            {m.thumbnail ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={m.thumbnail} alt="" className="h-14 w-14 shrink-0 rounded-lg object-cover bg-cv-border" />
+            ) : <div className="h-14 w-14 shrink-0 rounded-lg bg-cv-border" />}
+            <div className="min-w-0">
+              <p className="text-cv-text text-xs leading-snug line-clamp-2">{m.title || m.link}</p>
+              <p className="text-cv-sub text-[11px] font-mono mt-1 truncate">{m.source || hostOf(m.link)}</p>
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* Per-viewer table with snapshots and the CSV / JSON links. */
-export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl, jsonUrl, imageBase }: Thresholds & {
+export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl, jsonUrl, imageBase, jobId }: Thresholds & {
   csvUrl?: string;
   jsonUrl?: string;    // engaged.json
   imageBase?: string;  // prefix for snapshot paths, e.g. http://host/api/file/<job>/
+  jobId?: string;      // enables the SerpAPI "Look up" column
 }) {
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [lookups, setLookups] = useState<Record<number, { busy: boolean; error: string; result: LensResult | null }>>({});
+
+  const toggleLookup = async (personId: number) => {
+    if (!jobId) return;
+    if (openId === personId) { setOpenId(null); return; }
+    setOpenId(personId);
+    if (lookups[personId]?.result) return;
+    setLookups(l => ({ ...l, [personId]: { busy: true, error: '', result: null } }));
+    try {
+      const result = (await getLookup(jobId, personId)) ?? (await runLookup(jobId, personId));
+      setLookups(l => ({ ...l, [personId]: { busy: false, error: '', result } }));
+    } catch (e) {
+      setLookups(l => ({ ...l, [personId]: { busy: false, error: e instanceof Error ? e.message : 'Lookup failed', result: null } }));
+    }
+  };
+
   return (
       <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
         <div className="px-5 py-3 border-b border-cv-border flex items-center gap-2">
@@ -123,41 +203,62 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
                 <th className="text-left px-5 py-2 font-normal">ID</th>
                 <th className="text-left px-3 py-2 font-normal">Snapshot</th>
                 <th className="text-right px-3 py-2 font-normal">First seen</th>
-                <th className="text-right px-3 py-2 font-normal">Near camera</th>
                 <th className="text-right px-3 py-2 font-normal">Attention</th>
                 <th className="text-right px-3 py-2 font-normal">Looks</th>
-                <th className="text-right px-3 py-2 font-normal">Visits</th>
                 <th className="text-left px-5 py-2 font-normal">Behaviour</th>
+                {jobId && <th className="text-left px-3 py-2 font-normal">Lookup</th>}
               </tr>
             </thead>
             <tbody>
               {viewers.map(v => {
                 const c = classify(v.attention_sec, glanceSec, engageSec, strongSec);
+                const open = openId === v.person_id;
+                const state = lookups[v.person_id];
+                const cols = jobId ? 7 : 6;
                 return (
-                  <tr key={v.person_id} className="border-b border-cv-border/50 text-cv-text">
-                    <td className="px-5 py-2 font-mono">#{v.person_id}</td>
-                    <td className="px-3 py-2">
-                      {v.image && imageBase ? (
-                        <a href={imageBase + v.image} target="_blank" rel="noopener noreferrer">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={imageBase + v.image} alt={`Viewer ${v.person_id}`}
-                            className="h-12 w-9 object-cover rounded border border-cv-border" />
-                        </a>
-                      ) : <span className="text-cv-sub text-xs">-</span>}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono">{v.first_sec.toFixed(1)}s</td>
-                    <td className="px-3 py-2 text-right font-mono">{v.present_sec.toFixed(1)}s</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold">{v.attention_sec.toFixed(1)}s</td>
-                    <td className="px-3 py-2 text-right font-mono">{v.looks}</td>
-                    <td className="px-3 py-2 text-right font-mono">{v.visits ?? 1}</td>
-                    <td className="px-5 py-2">
-                      <span className={clsx('text-[11px] font-mono px-2 py-0.5 rounded whitespace-nowrap', BADGE[c])}>{LABEL[c]}</span>
-                    </td>
-                  </tr>
+                  <Fragment key={v.person_id}>
+                    <tr className={clsx('border-b border-cv-border/50 text-cv-text', open && 'bg-cv-accent/5')}>
+                      <td className="px-5 py-2 font-mono">#{v.person_id}</td>
+                      <td className="px-3 py-2">
+                        {v.image && imageBase ? (
+                          <a href={imageBase + v.image} target="_blank" rel="noopener noreferrer">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={imageBase + v.image} alt={`Viewer ${v.person_id}`}
+                              className="h-12 w-9 object-cover rounded border border-cv-border" />
+                          </a>
+                        ) : <span className="text-cv-sub text-xs">-</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">{v.first_sec.toFixed(1)}s</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold">{v.attention_sec.toFixed(1)}s</td>
+                      <td className="px-3 py-2 text-right font-mono">{v.looks}</td>
+                      <td className="px-5 py-2">
+                        <span className={clsx('text-[11px] font-mono px-2 py-0.5 rounded whitespace-nowrap', BADGE[c])}>{LABEL[c]}</span>
+                      </td>
+                      {jobId && (
+                        <td className="px-3 py-2">
+                          {v.image ? (
+                            <button onClick={() => toggleLookup(v.person_id)} disabled={state?.busy}
+                              className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-lg border border-cv-border text-cv-accent hover:border-cv-accent disabled:opacity-50 transition-colors">
+                              {state?.busy ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
+                              {open ? 'Hide' : state?.result ? 'View' : 'Look up'}
+                            </button>
+                          ) : <span className="text-cv-sub text-xs">-</span>}
+                        </td>
+                      )}
+                    </tr>
+                    {open && state && (
+                      <tr className="border-b border-cv-border/50">
+                        <td colSpan={cols} className="p-0">
+                          <LookupPanel personId={v.person_id} image={v.image && imageBase ? imageBase + v.image : undefined}
+                            state={state} onClose={() => setOpenId(null)} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
               {viewers.length === 0 && (
-                <tr><td colSpan={8} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
+                <tr><td colSpan={jobId ? 7 : 6} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
               )}
             </tbody>
           </table>
@@ -173,6 +274,7 @@ export function EngagementResults(p: Thresholds & {
   csvUrl?: string;
   jsonUrl?: string;
   imageBase?: string;
+  jobId?: string;
 }) {
   return (
     <div className="space-y-4">

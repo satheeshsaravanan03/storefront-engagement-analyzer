@@ -535,6 +535,7 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
           csvUrl={result.viewers_url}
           jsonUrl={result.engaged_json_url}
           imageBase={`${BACKEND}/api/file/${jobId}/`}
+          jobId={jobId}
         />
       </motion.div>
     </div>

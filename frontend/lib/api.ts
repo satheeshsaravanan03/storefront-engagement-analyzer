@@ -166,6 +166,34 @@ export async function deleteJob(jobId: string): Promise<void> {
   }
 }
 
+/* ── SerpAPI snapshot lookup (Google Lens) ────────────────── */
+export interface LensMatch {
+  title?: string;
+  source?: string;
+  link?: string;
+  thumbnail?: string;
+}
+
+export interface LensResult {
+  image_url: string;
+  search_url?: string;
+  visual_matches: LensMatch[];
+}
+
+export async function runLookup(jobId: string, personId: number): Promise<LensResult> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}/lookup/${personId}`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Lookup failed' }));
+    throw new Error(err.detail || 'Lookup failed');
+  }
+  return res.json();
+}
+
+export async function getLookup(jobId: string, personId: number): Promise<LensResult | null> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}/lookup/${personId}`, { cache: 'no-store' });
+  return res.ok ? res.json() : null;
+}
+
 /* ── Health check ─────────────────────────────────────────── */
 export async function checkBackendHealth(): Promise<boolean> {
   try {
