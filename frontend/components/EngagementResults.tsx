@@ -82,8 +82,8 @@ export function SummaryCards({ viewers, glanceSec, engageSec, strongSec, duratio
         <p className="text-cv-sub text-xs mt-3 leading-relaxed">
           {ignored} other {ignored === 1 ? 'person was' : 'people were'} near the camera but never looked long enough to count.
           People far away or just passing are not counted. Attention is measured from head direction, not eye
-          gaze, and does not confirm purchase intent. Each ID is a temporary tracker ID: a person who leaves the
-          video and comes back may be counted again.
+          gaze, and does not confirm purchase intent. A person who leaves and comes back is matched to the same ID
+          from clothing and hair colour, so people dressed alike may occasionally be merged or one person split.
         </p>
       </div>
     </div>
@@ -126,6 +126,7 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
                 <th className="text-right px-3 py-2 font-normal">Near camera</th>
                 <th className="text-right px-3 py-2 font-normal">Attention</th>
                 <th className="text-right px-3 py-2 font-normal">Looks</th>
+                <th className="text-right px-3 py-2 font-normal">Visits</th>
                 <th className="text-left px-5 py-2 font-normal">Behaviour</th>
               </tr>
             </thead>
@@ -148,14 +149,15 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
                     <td className="px-3 py-2 text-right font-mono">{v.present_sec.toFixed(1)}s</td>
                     <td className="px-3 py-2 text-right font-mono font-bold">{v.attention_sec.toFixed(1)}s</td>
                     <td className="px-3 py-2 text-right font-mono">{v.looks}</td>
+                    <td className="px-3 py-2 text-right font-mono">{v.visits ?? 1}</td>
                     <td className="px-5 py-2">
-                      <span className={clsx('text-[11px] font-mono px-2 py-0.5 rounded', BADGE[c])}>{LABEL[c]}</span>
+                      <span className={clsx('text-[11px] font-mono px-2 py-0.5 rounded whitespace-nowrap', BADGE[c])}>{LABEL[c]}</span>
                     </td>
                   </tr>
                 );
               })}
               {viewers.length === 0 && (
-                <tr><td colSpan={7} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
+                <tr><td colSpan={8} className="px-5 py-6 text-center text-cv-sub text-xs font-mono">No viewers recorded</td></tr>
               )}
             </tbody>
           </table>

@@ -13,20 +13,22 @@ module.exports = {
         mono: ['var(--font-mono)', 'monospace'],
       },
       colors: {
+        // Light theme. Token names are kept from the old dark theme so components don't change:
+        // black = page background, surface = sidebar / inputs, card = panels.
         cv: {
-          black:   '#0A0A0B',
-          surface: '#111114',
-          card:    '#18181C',
-          border:  '#2A2A32',
-          muted:   '#3A3A45',
-          text:    '#E8E8F0',
-          sub:     '#9090A8',
-          accent:  '#6C63FF',
-          accentL: '#8B84FF',
-          green:   '#22C55E',
-          amber:   '#F59E0B',
-          red:     '#EF4444',
-          cyan:    '#06B6D4',
+          black:   '#F4F5FA',
+          surface: '#FFFFFF',
+          card:    '#FFFFFF',
+          border:  '#E2E4EE',
+          muted:   '#D5D8E6',
+          text:    '#1B1D2A',
+          sub:     '#63688A',
+          accent:  '#4F46E5',
+          accentL: '#4338CA',   // hover: slightly darker on a light background
+          green:   '#16A34A',
+          amber:   '#D97706',
+          red:     '#DC2626',
+          cyan:    '#0891B2',
         }
       },
       animation: {

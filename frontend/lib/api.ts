@@ -13,6 +13,8 @@ export interface Viewer {
   attention_sec: number;     // time near the camera AND facing it
   longest_look_sec: number;
   looks: number;             // separate looks (gaps longer than the tolerance start a new one)
+  visits?: number;           // separate appearances; more than 1 = left and came back
+  track_ids?: number[];      // tracker IDs matched to this person
   speed: number;             // box-heights per second; low = standing still
   behaviour: Behaviour;      // classified with the thresholds used at processing time
   image?: string;            // snapshot path (engaged / strong viewers only), relative to the job folder
@@ -37,6 +39,8 @@ export interface AnalysisResult {
     min_look_sec: number;
     ignored: number;         // people near the camera who never looked long enough
     captured?: number;       // snapshots saved
+    tracks?: number;         // tracker IDs seen near the camera
+    people?: number;         // distinct people after matching returning ones
   };
   viewers?: Viewer[];
   viewers_url?: string;       // CSV download URL

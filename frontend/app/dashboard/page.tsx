@@ -3,14 +3,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Eye, Upload, Settings2, Play, AlertTriangle, CheckCircle2,
-  Loader2, Sliders, X, Wifi, WifiOff, Download,
-  Activity, Users, Clock, Camera, Zap,
-  ChevronRight, Film, List,
+  Upload, Play, AlertTriangle, CheckCircle2,
+  Loader2, Sliders, X, Download, Zap, Film,
+  ChevronDown, Plus,
 } from 'lucide-react';
-import Link from 'next/link';
 import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult } from '@/lib/api';
 import { SummaryCards, ViewersTable } from '@/components/EngagementResults';
+import { AppShell } from '@/components/AppShell';
 import clsx from 'clsx';
 
 /* ── Inline video player with error handling ─────────────────
@@ -71,15 +70,28 @@ function VideoPlayerInline({ src }: { src: string }) {
 /* ── Local preview of the chosen file, before upload ───────── */
 function VideoPreview({ file }: { file: File }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     const u = URL.createObjectURL(file);
-    setUrl(u);
+    setUrl(u); setFailed(false);
     return () => URL.revokeObjectURL(u);
   }, [file]);
   if (!url) return null;
   return (
     <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
-      <video src={url} controls muted playsInline className="w-full bg-black" style={{ maxHeight: 420 }} />
+      <div className="relative bg-black">
+        <video src={url} controls muted playsInline className="w-full bg-black" style={{ maxHeight: 420 }}
+          onError={() => setFailed(true)} />
+        {failed && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-cv-surface gap-2 p-6 text-center">
+            <AlertTriangle size={26} className="text-cv-amber" />
+            <p className="text-cv-text font-semibold text-sm">This browser cannot play this video</p>
+            <p className="text-cv-sub text-xs max-w-sm">
+              The file uses a codec the browser does not support (for example H.265). You can still analyse it; the preview just cannot be shown.
+            </p>
+          </div>
+        )}
+      </div>
       <p className="px-4 py-2 text-cv-sub text-xs font-mono border-t border-cv-border">
         Preview. Best results: camera at the display, facing the people who approach.
       </p>
@@ -87,47 +99,161 @@ function VideoPreview({ file }: { file: File }) {
   );
 }
 
-/* ── Settings slider panel ────────────────────────────────── */
+/* ── Settings ─────────────────────────────────────────────── */
 type Settings = {
   confidence: number; glance_sec: number; engage_sec: number; strong_sec: number;
   min_look_sec: number; near_ratio: number;
 };
 
-function SettingsPanel({ config, onChange }: {
-  config: Settings;
-  onChange: (k: keyof Settings, v: number) => void;
-}) {
-  const sliders: { key: keyof Settings; label: string; min: number; max: number; step: number; hint?: string }[] = [
-    { key: 'min_look_sec', label: 'Minimum look to count (sec)',      min: 0.5, max: 5,  step: 0.5, hint: 'Shorter looks are not counted as viewers' },
-    { key: 'glance_sec',   label: 'Stopped & looked from (sec)',      min: 1,   max: 10, step: 0.5, hint: 'Below this a look is only a glance' },
-    { key: 'engage_sec',   label: 'Engaged from (sec)',               min: 1,   max: 30, step: 1,   hint: 'Attention at or above this is potential engagement' },
-    { key: 'strong_sec',   label: 'Strongly engaged from (sec)',      min: 2,   max: 60, step: 1,   hint: 'Attention at or above this is a stronger signal' },
-    { key: 'near_ratio',   label: 'Nearness (person height / frame)', min: 0.1, max: 0.8, step: 0.05, hint: 'People smaller than this (far away) are ignored' },
-    { key: 'confidence',   label: 'Detection confidence',             min: 0.2, max: 0.9, step: 0.05 },
+const PRESETS: { name: string; values: Settings }[] = [
+  { name: 'Lenient',  values: { confidence: 0.35, glance_sec: 1.5, engage_sec: 3, strong_sec: 6,  min_look_sec: 0.5, near_ratio: 0.25 } },
+  { name: 'Balanced', values: { confidence: 0.40, glance_sec: 2,   engage_sec: 5, strong_sec: 10, min_look_sec: 1,   near_ratio: 0.30 } },
+  { name: 'Strict',   values: { confidence: 0.50, glance_sec: 3,   engage_sec: 7, strong_sec: 15, min_look_sec: 1.5, near_ratio: 0.35 } },
+];
+const DEFAULT_SETTINGS = PRESETS.find(p => p.name === 'Balanced')!.values;
+const sameSettings = (a: Settings, b: Settings) =>
+  (Object.keys(a) as (keyof Settings)[]).every(k => a[k] === b[k]);
+
+const LEVEL_COLORS = ['#E4E6F0', '#C9CCF7', '#8F8AF0', '#4F46E5', '#2E2A86'];
+
+/* Bar showing how the thresholds split attention time into levels */
+function LevelBar({ c }: { c: Settings }) {
+  const b = [0, c.min_look_sec, c.glance_sec, c.engage_sec, c.strong_sec];
+  for (let i = 1; i < b.length; i++) b[i] = Math.max(b[i], b[i - 1]);   // keep in order if one is dragged past another
+  const total = b[4] * 1.35 || 1;
+  const widths = [b[1] - b[0], b[2] - b[1], b[3] - b[2], b[4] - b[3], total - b[4]];
+  const legend = [
+    ['Not counted', `< ${c.min_look_sec} s`],
+    ['Glance',      `${c.min_look_sec}–${c.glance_sec} s`],
+    ['Looked',      `${c.glance_sec}–${c.engage_sec} s`],
+    ['Engaged',     `${c.engage_sec}–${c.strong_sec} s`],
+    ['Strong',      `≥ ${c.strong_sec} s`],
   ];
   return (
-    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-      className="glow-border bg-cv-card rounded-2xl p-6 space-y-5"
-    >
+    <div className="rounded-2xl bg-cv-black p-4">
+      <div className="flex h-3 rounded-full overflow-hidden gap-0.5">
+        {widths.map((w, i) => (
+          <div key={i} style={{ width: `${(w / total) * 100}%`, background: LEVEL_COLORS[i] }} />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-5 gap-y-2 mt-4 text-sm">
+        {legend.map(([name, range], i) => (
+          <div key={name} className="flex items-center gap-2 whitespace-nowrap">
+            <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: LEVEL_COLORS[i] }} />
+            <span className="text-cv-text">{name}</span>
+            <span className="font-mono text-xs text-cv-sub whitespace-nowrap">{range}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingSlider({ label, value, min, max, step, unit, hint, onChange }: {
+  label: string; value: number; min: number; max: number; step: number;
+  unit?: string; hint?: string; onChange: (v: number) => void;
+}) {
+  const pct = ((value - min) / (max - min)) * 100;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2.5">
+        <label className="text-sm font-medium text-cv-text">{label}</label>
+        <span className="font-mono text-xs font-semibold text-cv-accent bg-cv-accent/10 px-2 py-1 rounded-md">
+          {unit ? `${value} ${unit}` : value.toFixed(2)}
+        </span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        className="cv-range w-full"
+        style={{ background: `linear-gradient(to right, #4F46E5 ${pct}%, #E2E4EE ${pct}%)` }} />
+      {hint && <p className="text-cv-sub text-xs mt-2">{hint}</p>}
+    </div>
+  );
+}
+
+function SettingsPanel({ config, onChange, onPreset }: {
+  config: Settings;
+  onChange: (k: keyof Settings, v: number) => void;
+  onPreset: (v: Settings) => void;
+}) {
+  return (
+    <div className="glow-border bg-cv-card p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Sliders size={15} className="text-cv-accent" />
-          <span className="font-semibold text-cv-text text-sm">Analysis Settings</span>
+        <div className="flex items-center gap-2.5">
+          <Sliders size={16} className="text-cv-accent" />
+          <span className="font-semibold text-cv-text text-lg">Analysis settings</span>
+        </div>
+        <button onClick={() => onPreset(DEFAULT_SETTINGS)} className="text-cv-accent hover:text-cv-accentL text-sm font-semibold">Reset</button>
+      </div>
+
+      <div>
+        <p className="text-[11px] font-semibold tracking-wider text-cv-sub mb-2.5">PRESET</p>
+        <div className="flex gap-2 flex-wrap">
+          {PRESETS.map(p => (
+            <button key={p.name} onClick={() => onPreset(p.values)}
+              className={clsx('px-4 py-2 rounded-full text-sm font-medium border transition-colors',
+                sameSettings(config, p.values)
+                  ? 'bg-cv-accent text-white border-cv-accent'
+                  : 'bg-cv-card text-cv-text border-cv-border hover:border-cv-accent/40')}>
+              {p.name}
+            </button>
+          ))}
         </div>
       </div>
-      {sliders.map(s => (
-        <div key={s.key}>
-          <div className="flex justify-between mb-1.5">
-            <label className="text-sm text-cv-sub">{s.label}</label>
-            <span className="font-mono text-cv-accent text-sm font-bold">{config[s.key]}</span>
-          </div>
-          <input type="range" min={s.min} max={s.max} step={s.step} value={config[s.key]}
-            onChange={e => onChange(s.key, parseFloat(e.target.value))}
-            className="w-full h-1.5 bg-cv-border rounded-full appearance-none cursor-pointer accent-cv-accent" />
-          {s.hint && <p className="text-cv-sub text-[11px] mt-1">{s.hint}</p>}
+
+      <div className="space-y-5">
+        <div>
+          <p className="font-semibold text-cv-text">Attention levels</p>
+          <p className="text-cv-sub text-sm mt-1">Seconds of facing the display needed to reach each level.</p>
         </div>
-      ))}
-    </motion.div>
+        <LevelBar c={config} />
+        <SettingSlider label="Minimum look to count" unit="s" min={0.5} max={5} step={0.5} value={config.min_look_sec}
+          hint="Shorter looks are not counted as viewers" onChange={v => onChange('min_look_sec', v)} />
+        <SettingSlider label="Stopped & looked from" unit="s" min={1} max={10} step={0.5} value={config.glance_sec}
+          hint="Below this, a look is only a glance" onChange={v => onChange('glance_sec', v)} />
+        <SettingSlider label="Engaged from" unit="s" min={1} max={30} step={1} value={config.engage_sec}
+          hint="Attention at or above this is potential engagement" onChange={v => onChange('engage_sec', v)} />
+        <SettingSlider label="Strongly engaged from" unit="s" min={2} max={60} step={1} value={config.strong_sec}
+          hint="Attention at or above this is a stronger signal" onChange={v => onChange('strong_sec', v)} />
+      </div>
+
+      <div className="border-t border-cv-border pt-6 space-y-5">
+        <div>
+          <p className="font-semibold text-cv-text">Detection</p>
+          <p className="text-cv-sub text-sm mt-1">Which people in the frame are considered.</p>
+        </div>
+        <SettingSlider label="Nearness (person height / frame)" min={0.1} max={0.8} step={0.05} value={config.near_ratio}
+          hint="People smaller than this (far away) are ignored" onChange={v => onChange('near_ratio', v)} />
+        <SettingSlider label="Detection confidence" min={0.2} max={0.9} step={0.05} value={config.confidence}
+          hint="Minimum confidence for a person detection" onChange={v => onChange('confidence', v)} />
+      </div>
+
+    </div>
+  );
+}
+
+/* ── Start button, shown right under the video preview ───── */
+function StartButton({ onStart, canStart, starting, backendOnline }: {
+  onStart: () => void;
+  canStart: boolean;
+  starting: boolean;
+  backendOnline: boolean | null;
+}) {
+  return (
+    <div>
+      <button onClick={onStart} disabled={!canStart}
+        className={clsx('w-full py-4 rounded-2xl font-semibold text-base flex items-center justify-center gap-2.5 transition-colors',
+          canStart ? 'bg-cv-accent hover:bg-cv-accentL text-white' : 'bg-cv-muted text-cv-sub cursor-not-allowed',
+          starting && 'opacity-70 cursor-wait')}>
+        {starting
+          ? <><Loader2 size={17} className="animate-spin" /> Uploading...</>
+          : <><Play size={16} fill="currentColor" /> Analyse video</>}
+      </button>
+      <p className={clsx('text-center text-sm mt-2.5', backendOnline === false ? 'text-cv-red' : 'text-cv-sub')}>
+        {backendOnline === false ? 'Backend offline. Run: uvicorn main:app --port 8000'
+          : 'Ready. The analysis runs on the backend.'}
+      </p>
+    </div>
   );
 }
 
@@ -148,30 +274,85 @@ function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
       className={clsx(
-        'drop-zone border-2 border-dashed rounded-2xl p-14 cursor-pointer text-center transition-all duration-200',
-        dragging ? 'dragging' : 'border-cv-border hover:border-cv-accent/40',
+        'drop-zone border-2 border-dashed rounded-3xl px-8 py-14 cursor-pointer text-center transition-all duration-200',
+        dragging ? 'dragging' : 'border-cv-accent/30 bg-cv-accent/[0.03] hover:border-cv-accent/50',
         disabled && 'opacity-50 cursor-not-allowed'
       )}
     >
       <input ref={inputRef} type="file" accept="video/*" className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
-      <motion.div animate={{ y: dragging ? -10 : 0 }} className="flex flex-col items-center gap-5">
-        <div className="w-20 h-20 rounded-2xl bg-cv-accent/10 border border-cv-accent/30 flex items-center justify-center">
-          <Upload size={34} className="text-cv-accent" />
+      <div className="flex flex-col items-center gap-5">
+        <div className="w-16 h-16 rounded-2xl bg-cv-accent/10 flex items-center justify-center">
+          <Upload size={28} className="text-cv-accent" />
         </div>
         <div>
-          <p className="text-cv-text font-semibold text-lg mb-1">Drop your video here</p>
-          <p className="text-cv-sub text-sm">MP4 · AVI · MOV · MKV — up to 500 MB</p>
-          <p className="text-cv-sub text-xs mt-2 font-mono">Prerecorded footage from a camera placed at the display</p>
+          <p className="text-cv-text font-semibold text-2xl mb-1.5">Drop your video here</p>
+          <p className="text-cv-sub">or choose a file from your computer</p>
         </div>
-        <div className="flex items-center gap-6 text-xs text-cv-sub font-mono flex-wrap justify-center">
-          <span className="flex items-center gap-1.5"><Camera size={11} className="text-cv-accent" />YOLOv8 pose</span>
-          <span className="flex items-center gap-1.5"><Activity size={11} className="text-cv-cyan" />ByteTrack IDs</span>
-          <span className="flex items-center gap-1.5"><Users size={11} className="text-cv-green" />Facing the display</span>
-          <span className="flex items-center gap-1.5"><Clock size={11} className="text-cv-amber" />Attention time</span>
+        <button type="button" disabled={disabled}
+          onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+          className="bg-cv-accent hover:bg-cv-accentL text-white font-semibold px-6 py-3 rounded-xl transition-colors">
+          Choose video
+        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-center">
+          {['MP4', 'AVI', 'MOV', 'MKV'].map(t => (
+            <span key={t} className="font-mono text-xs text-cv-sub border border-cv-border rounded-full px-3 py-1 bg-cv-card">{t}</span>
+          ))}
+          <span className="text-cv-sub text-sm ml-1">Up to 500 MB</span>
         </div>
-      </motion.div>
+        <p className="text-cv-sub text-sm">Prerecorded footage from a camera placed at the display</p>
+      </div>
     </div>
+  );
+}
+
+/* ── Explainer cards under the drop zone ──────────────────── */
+function HowItWorks() {
+  const steps = [
+    ['01', 'Detect people',                 'YOLOv8 pose finds every person in each frame.'],
+    ['02', 'Track each visitor',            'ByteTrack IDs keep one identity per person across frames.'],
+    ['03', 'Check who faces the display',   'Head and body pose decide whether someone is looking.'],
+    ['04', 'Measure attention time',        'Look duration is grouped into the levels you set.'],
+  ];
+  return (
+    <div className="glow-border bg-cv-card p-6">
+      <p className="font-semibold text-cv-text text-lg mb-4">How the analysis works</p>
+      <div className="grid sm:grid-cols-3 gap-3">
+        {steps.map(([n, title, text], i) => (
+          <div key={n} className={clsx('rounded-2xl border border-cv-border p-4', i === 3 && 'sm:col-span-3')}>
+            <p className="font-mono text-xs text-cv-accent mb-2">{n}</p>
+            <p className="font-semibold text-cv-text mb-1">{title}</p>
+            <p className="text-cv-sub text-sm leading-relaxed">{text}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TipsAccordion() {
+  const tips = [
+    'Mount the camera at the display, at head height, facing visitors',
+    'People far away or turned away are not counted',
+    'Keep videos under 100 MB for fast processing',
+    'Set the thresholds before uploading; they apply to the whole analysis',
+    'Every analysis is saved on the Jobs page',
+  ];
+  return (
+    <details className="glow-border bg-cv-card group">
+      <summary className="flex items-center justify-between px-6 py-5 cursor-pointer select-none list-none">
+        <span className="font-semibold text-cv-text text-lg">Tips for reliable results</span>
+        <ChevronDown size={18} className="text-cv-sub transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="px-6 pb-5 space-y-3">
+        {tips.map(t => (
+          <div key={t} className="flex items-start gap-2.5">
+            <Zap size={13} className="text-cv-accent mt-1 flex-shrink-0" />
+            <span className="text-cv-sub text-sm leading-relaxed">{t}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -200,6 +381,7 @@ function LivePreview({ result }: { result: AnalysisResult }) {
           <motion.div
             className="h-full rounded-full"
             style={{ background: 'linear-gradient(90deg, #6C63FF, #06B6D4)' }}
+            initial={{ width: 0 }}
             animate={{ width: `${pct}%` }}
             transition={{ duration: 0.4, ease: 'easeOut' }}
           />
@@ -234,7 +416,10 @@ function LivePreview({ result }: { result: AnalysisResult }) {
         <div className="rounded-2xl border border-cv-border bg-cv-surface flex items-center justify-center" style={{ aspectRatio: '16/9' }}>
           <div className="text-center">
             <Loader2 size={32} className="text-cv-accent animate-spin mx-auto mb-3" />
-            <p className="text-cv-sub text-sm">Loading first frame...</p>
+            <p className="text-cv-text text-sm font-medium">Analysing video...</p>
+            <p className="text-cv-sub text-xs mt-1 max-w-xs mx-auto">
+              The live preview appears as soon as the first frames are processed. Model loading can take a few seconds.
+            </p>
           </div>
         </div>
       )}
@@ -364,9 +549,7 @@ export default function DashboardPage() {
   const [state, setState]             = useState<'idle'|'uploading'|'processing'|'done'|'error'>('idle');
   const [error, setError]             = useState<string | null>(null);
   const [backendOnline, setBackend]   = useState<boolean | null>(null);
-  const [config, setConfig]           = useState<Settings>({
-    confidence: 0.40, glance_sec: 2, engage_sec: 5, strong_sec: 10, min_look_sec: 1, near_ratio: 0.30,
-  });
+  const [config, setConfig]           = useState<Settings>(DEFAULT_SETTINGS);
   const stopStream = useRef<(()=>void)|null>(null);
 
   useEffect(() => { checkBackendHealth().then(setBackend); }, []);
@@ -411,128 +594,81 @@ export default function DashboardPage() {
   };
 
   const canStart = !!file && !!backendOnline && state !== 'uploading';
+  const showSettings = state === 'idle' || state === 'uploading' || state === 'error';
+  const eyebrow = { idle: 'NEW ANALYSIS', uploading: 'NEW ANALYSIS', processing: 'IN PROGRESS', done: 'RESULTS', error: 'NEW ANALYSIS' }[state];
 
   return (
-    <div className="noise mesh-bg min-h-screen">
-      {/* Nav */}
-      <nav className="border-b border-cv-border bg-cv-surface/80 backdrop-blur-xl px-6 py-4 flex items-center justify-between sticky top-0 z-40">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-gradient-to-br from-cv-accent to-cv-cyan rounded-lg flex items-center justify-center">
-              <Eye size={13} className="text-white" />
-            </div>
-            <span className="font-display text-lg text-cv-text">Storefront Engagement</span>
-            <ChevronRight size={14} className="text-cv-border" />
-            <span className="text-cv-sub text-sm">Analysis</span>
+    <AppShell>
+      <div>
+        {/* Header */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold tracking-wider text-cv-accent mb-2">{eyebrow}</p>
+            <h1 className="font-display text-4xl text-cv-text mb-2">
+              {state === 'done' ? 'Analysis complete' :
+               state === 'processing' ? 'Processing...' :
+               'Visitor attention analysis'}
+            </h1>
+            <p className="text-cv-sub max-w-2xl">
+              {state === 'idle'       && (file
+                ? 'Check the preview, adjust the settings if needed, then analyse the video.'
+                : 'Upload a prerecorded video from a camera at your product or advertisement to see who looked at it, and for how long.')}
+              {state === 'uploading'  && 'Uploading your video to the backend...'}
+              {state === 'processing' && 'Pose detection + ByteTrack running frame by frame. Preview updates live.'}
+              {state === 'done'       && 'Viewers, attention times, behaviour, the annotated video and CSV are ready below.'}
+              {state === 'error'      && 'Something went wrong. See error details below.'}
+            </p>
           </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Link href="/jobs"
-            className="glow-border bg-cv-card text-cv-sub hover:text-cv-text px-3 py-1.5 rounded-xl text-sm flex items-center gap-2 transition-colors">
-            <List size={14} /> Jobs
-          </Link>
-          {/* Backend indicator */}
-          <div className={clsx(
-            'flex items-center gap-1.5 text-xs font-mono px-3 py-1.5 rounded-full border',
-            backendOnline === null ? 'border-cv-border text-cv-sub' :
-            backendOnline  ? 'border-cv-green/30 text-cv-green bg-cv-green/5' :
-                             'border-cv-red/30 text-cv-red bg-cv-red/5'
-          )}>
-            {backendOnline === null ? <Loader2 size={11} className="animate-spin" /> :
-             backendOnline  ? <Wifi size={11} />   : <WifiOff size={11} />}
-            {backendOnline === null ? 'Checking...' :
-             backendOnline  ? 'Backend Online' : 'Backend Offline'}
-          </div>
-
           {state === 'done' && (
             <button onClick={handleReset}
-              className="glow-border bg-cv-card text-cv-sub hover:text-cv-text px-3 py-1.5 rounded-xl text-sm flex items-center gap-2 transition-colors">
-              <Upload size={14} /> New Video
+              className="bg-cv-accent hover:bg-cv-accentL text-white px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 transition-colors flex-shrink-0">
+              <Plus size={15} /> New video
             </button>
           )}
-        </div>
-      </nav>
-
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        {/* Header */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-          <h1 className="font-display text-4xl text-cv-text mb-2">
-            {state === 'done' ? 'Analysis Complete' :
-             state === 'processing' ? 'Processing...' :
-             'Visitor Attention Analysis'}
-          </h1>
-          <p className="text-cv-sub">
-            {state === 'idle'       && (file
-              ? 'Check the preview, adjust settings if needed, then start the analysis.'
-              : 'Upload a prerecorded video from a camera at your product or advertisement to see who looked at it, and for how long.')}
-            {state === 'uploading'  && 'Uploading your video to the backend...'}
-            {state === 'processing' && 'Pose detection + ByteTrack running frame by frame. Preview updates live.'}
-            {state === 'done'       && 'Viewers, attention times, behaviour, the annotated video and CSV are ready below.'}
-            {state === 'error'      && 'Something went wrong. See error details below.'}
-          </p>
         </motion.div>
 
-        <div className="grid md:grid-cols-3 gap-6">
+        <div className="grid xl:grid-cols-3 gap-6">
           {/* Main column — 2/3 width */}
-          <div className="md:col-span-2 space-y-4">
-            {/* Upload / preview + zone */}
-            <AnimatePresence>
-              {(state === 'idle' || state === 'uploading') && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
-                  {!file && <UploadZone onFile={handleFile} disabled={state === 'uploading'} />}
+          <div className="xl:col-span-2 space-y-5 min-w-0">
+            {/* Upload / preview */}
+            {(state === 'idle' || state === 'uploading' || state === 'error') && (
+              <div className="space-y-5">
+                {!file && (
+                  <>
+                    <UploadZone onFile={handleFile} disabled={state === 'uploading'} />
+                    <HowItWorks />
+                    <TipsAccordion />
+                  </>
+                )}
 
-                  {file && (
-                    <>
-                      <div className="glow-border bg-cv-card rounded-xl p-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 bg-cv-accent/10 rounded-lg flex items-center justify-center">
-                            <Film size={16} className="text-cv-accent" />
-                          </div>
-                          <div>
-                            <p className="text-cv-text text-sm font-medium">{file.name}</p>
-                            <p className="text-cv-sub text-xs font-mono">{(file.size/1e6).toFixed(1)} MB · {file.type}</p>
-                          </div>
+                {file && (
+                  <>
+                    <div className="glow-border bg-cv-card p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-cv-accent/10 rounded-lg flex items-center justify-center">
+                          <Film size={17} className="text-cv-accent" />
                         </div>
-                        <button onClick={handleReset} className="text-cv-sub hover:text-cv-red transition-colors"><X size={16} /></button>
+                        <div>
+                          <p className="text-cv-text text-sm font-medium">{file.name}</p>
+                          <p className="text-cv-sub text-xs font-mono">{(file.size/1e6).toFixed(1)} MB · {file.type}</p>
+                        </div>
                       </div>
+                      <button onClick={handleReset} title="Remove video" className="text-cv-sub hover:text-cv-red transition-colors"><X size={17} /></button>
+                    </div>
 
-                      <VideoPreview file={file} />
-                    </>
-                  )}
-
-                  {file && (
-                    <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                      onClick={handleStart}
-                      disabled={!canStart}
-                      whileHover={{ scale: canStart ? 1.02 : 1 }} whileTap={{ scale: canStart ? 0.98 : 1 }}
-                      className={clsx(
-                        'w-full py-4 rounded-2xl font-semibold text-base flex items-center justify-center gap-3 transition-all',
-                        canStart ? 'bg-cv-accent hover:bg-cv-accentL text-white' : 'bg-cv-muted text-cv-sub cursor-not-allowed',
-                        state === 'uploading' && 'opacity-70 cursor-wait'
-                      )}
-                    >
-                      {state === 'uploading'
-                        ? <><Loader2 size={18} className="animate-spin" /> Uploading...</>
-                        : <><Play size={18} fill="currentColor" /> Start Analysis</>
-                      }
-                    </motion.button>
-                  )}
-
-                  {backendOnline === false && (
-                    <p className="text-cv-red text-xs text-center mt-2 font-mono">
-                      ⚠ Backend offline. Run: uvicorn main:app --reload --port 8000
-                    </p>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                    <VideoPreview file={file} />
+                    <StartButton onStart={handleStart} canStart={canStart}
+                      starting={state === 'uploading'} backendOnline={backendOnline} />
+                  </>
+                )}
+              </div>
+            )}
 
             {/* LIVE PREVIEW during processing */}
             <AnimatePresence>
-              {state === 'processing' && result && (
+              {state === 'processing' && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <LivePreview result={result} />
+                  <LivePreview result={result ?? {} as AnalysisResult} />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -550,26 +686,25 @@ export default function DashboardPage() {
             </AnimatePresence>
 
             {/* Error */}
-            <AnimatePresence>
-              {state === 'error' && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                  className="glow-border bg-cv-red/5 border-cv-red/30 rounded-2xl p-5 flex items-start gap-4"
-                >
-                  <AlertTriangle size={20} className="text-cv-red flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <p className="font-semibold text-cv-text mb-1">Processing failed</p>
-                    <p className="text-cv-sub text-sm font-mono">{error}</p>
-                  </div>
-                  <button onClick={handleReset} className="text-cv-sub hover:text-cv-text"><X size={16} /></button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {state === 'error' && (
+              <div className="glow-border bg-cv-red/5 border-cv-red/30 p-5 flex items-start gap-4">
+                <AlertTriangle size={20} className="text-cv-red flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold text-cv-text mb-1">Processing failed</p>
+                  <p className="text-cv-sub text-sm font-mono whitespace-pre-wrap">{error}</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Sidebar — 1/3 width: settings before analysis, analytics after, so no scrolling */}
-          <div className="space-y-4 md:sticky md:top-20 md:self-start md:max-h-[calc(100vh-6rem)] md:overflow-y-auto">
-            {(state === 'idle' || state === 'uploading' || state === 'error') && (
-              <SettingsPanel config={config} onChange={setSetting} />
+          {/* Right column: settings before analysis, thresholds + analytics after */}
+          <div className={clsx('space-y-4 min-w-0', state === 'done' && 'xl:sticky xl:top-6 xl:self-start xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:p-1 xl:-m-1')}>
+            {showSettings && (
+              <SettingsPanel config={config} onChange={setSetting} onPreset={setConfig} />
+            )}
+
+            {state === 'processing' && (
+              <ThresholdValues glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec} />
             )}
 
             {state === 'done' && result && (
@@ -586,75 +721,9 @@ export default function DashboardPage() {
                 />
               </>
             )}
-
-            <details className="glow-border bg-cv-card rounded-2xl p-5 group">
-              <summary className="text-xs font-mono text-cv-sub tracking-wider cursor-pointer select-none">
-                PIPELINE &amp; TIPS
-              </summary>
-              <div className="mt-4 space-y-4">
-            {/* Pipeline steps */}
-            <div>
-              <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">PIPELINE</p>
-              {[
-                { n:'01', label:'Person + Pose Detection', color:'bg-cv-accent', done: ['processing','done'].includes(state) },
-                { n:'02', label:'ByteTrack IDs',           color:'bg-cv-cyan',   done: ['processing','done'].includes(state) },
-                { n:'03', label:'Near + Facing Test',      color:'bg-cv-green',  done: ['processing','done'].includes(state) },
-                { n:'04', label:'Attention Time',          color:'bg-cv-amber',  done: state === 'done' },
-                { n:'05', label:'Behaviour Labels',        color:'bg-purple-500', done: state === 'done' },
-              ].map(({ n, label, color, done }) => (
-                <div key={n} className="flex items-center gap-3 mb-3">
-                  <div className={clsx(
-                    'w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 transition-all duration-500',
-                    done ? color : 'bg-cv-border'
-                  )}>
-                    {done
-                      ? <CheckCircle2 size={13} className="text-white" />
-                      : <span className="text-[9px] font-mono text-cv-sub font-bold">{n}</span>
-                    }
-                  </div>
-                  <span className={clsx('text-sm transition-colors duration-300', done ? 'text-cv-text' : 'text-cv-sub')}>{label}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* What you'll get */}
-            <div>
-              <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">YOU WILL GET</p>
-              {[
-                { e:'🎬', l:'Annotated video (MP4)'   },
-                { e:'👀', l:'Viewers + attention time' },
-                { e:'🎯', l:'Behaviour labels'         },
-                { e:'📋', l:'viewers.csv'              },
-                { e:'📦', l:'All files as ZIP'        },
-              ].map(({ e, l }) => (
-                <div key={l} className="flex items-center gap-2 mb-2 text-sm text-cv-sub">
-                  <span className="text-base">{e}</span>
-                  <span className="font-mono text-xs">{l}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Tips */}
-            <div>
-              <p className="text-xs font-mono text-cv-sub mb-4 tracking-wider">TIPS</p>
-              {[
-                'Mount the camera at the display, at head height, facing visitors',
-                'People far away or turned away are not counted',
-                'Keep videos under 100 MB for fast processing',
-                'Thresholds can be changed after processing',
-                'Every analysis is saved on the Jobs page',
-              ].map(t => (
-                <div key={t} className="flex items-start gap-2 mb-3">
-                  <Zap size={12} className="text-cv-accent mt-0.5 flex-shrink-0" />
-                  <span className="text-cv-sub text-xs leading-relaxed">{t}</span>
-                </div>
-              ))}
-            </div>
-              </div>
-            </details>
           </div>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

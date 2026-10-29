@@ -27,6 +27,7 @@ from typing import Dict, Optional
 import cv2
 import numpy as np
 
+import reid as reid_mod
 from storage import get_storage
 
 
@@ -215,6 +216,17 @@ def snapshot_score(frame: np.ndarray, box) -> float:
     return (y2 - y1) * (50.0 + min(float(sharp), 500.0))
 
 
+def count_visits(people: list, gap_sec: float) -> int:
+    """Separate appearances: tracks closer together than gap_sec are one visit."""
+    spans = sorted((p["first"], p["last"]) for p in people)
+    visits, end = 0, None
+    for first, last in spans:
+        if end is None or first - end > gap_sec:
+            visits += 1
+        end = last if end is None else max(end, last)
+    return visits
+
+
 # ── Per-person attention tracking ─────────────────────────────
 class AttentionTracker:
     """
@@ -308,6 +320,11 @@ def process_video_job(
         obj_every    = int(config.get("obj_every", 3))          # run the object detector every N frames
         busy_hold    = float(config.get("busy_hold_sec", 1.0))  # keep "busy" this long after an object is seen
         capture      = bool(config.get("capture_images", True)) # save a snapshot of each engaged viewer
+        use_reid     = bool(config.get("reid", True))           # treat a returning person as the same person
+        reid_thresh  = float(config.get("reid_threshold", 0.88))
+        reid_margin  = float(config.get("reid_margin", 0.02))
+        reid_every   = int(config.get("reid_every", 3))         # take an appearance sample every N frames
+        visit_gap    = float(config.get("visit_gap_sec", 5))    # away longer than this = a new visit
         if not glance_sec <= engage_sec <= strong_sec:
             raise ValueError("Thresholds must satisfy glance <= engage <= strong")
         device = "0" if torch.cuda.is_available() else "cpu"
@@ -332,6 +349,17 @@ def process_video_job(
         TOTAL = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         tracker = AttentionTracker(FPS, grace_sec)
+        gallery = reid_mod.Gallery(reid_thresh, reid_margin,
+                                   stitch_threshold=float(config.get("stitch_threshold", 0.76)),
+                                   stitch_gap=int(float(config.get("stitch_gap_sec", 1.5)) * FPS))
+
+        def group_totals() -> Dict[int, float]:
+            """Attention per person, summing every tracker ID matched to the same person."""
+            tot: Dict[int, float] = {}
+            for t, pr in tracker.people.items():
+                k = gallery.pid(t)
+                tot[k] = tot.get(k, 0.0) + pr["attention"]
+            return tot
 
         jobs.update(job_id, {
             "total_frames": TOTAL,
@@ -398,6 +426,18 @@ def process_video_job(
                             facing = (not require_face) or has_frontal_face(frame, kp)
                     recs.append((int(tid), (x1, y1, x2, y2), kp, kc, near, facing, reason, h))
 
+                # Same-person matching (frame is still clean here)
+                if use_reid:
+                    active = {rc[0] for rc in recs}
+                    for rc in recs:
+                        t = rc[0]
+                        gallery.seen(t, fid, rc[1])
+                        if rc[4] and (fid + t) % reid_every == 0 and gallery.tracks[t]["samples"] < 30:
+                            sig = reid_mod.embed(frame, rc[1])
+                            if sig:
+                                gallery.add(t, fid, sig)
+                        gallery.try_assign(t, active)
+
                 # Phones / food / drinks: only worth running when someone looks attentive
                 if obj_model is not None and fid % obj_every == 0:
                     cands = [(t, b, kp, kc) for t, b, kp, kc, near, f, _, _ in recs if near and f]
@@ -429,10 +469,11 @@ def process_video_job(
                                 "sec": round(fid / FPS, 2), "bbox": [int(x1), int(y1), int(x2), int(y2)],
                             }
 
-            viewers = [t for t, p in tracker.people.items() if p["attention"] >= min_look_sec]
+            totals = group_totals()
+            viewers = [k for k, a in totals.items() if a >= min_look_sec]
             counts = {GLANCED: 0, LOOKED: 0, ENGAGED: 0, STRONG: 0}
-            for t in viewers:
-                counts[classify(tracker.attention(t), glance_sec, engage_sec, strong_sec)] += 1
+            for k in viewers:
+                counts[classify(totals[k], glance_sec, engage_sec, strong_sec)] += 1
             looking_now = sum(1 for _, _, _, _, _, _, f, _ in people if f)
 
             fps_buf.append(1.0 / max(time.time() - t0, 1e-6))
@@ -444,10 +485,11 @@ def process_video_job(
                 if not near:  # far away: ignored, drawn faintly
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (110, 110, 110), 1)
                     continue
-                a = tracker.attention(tid)
+                pid = gallery.pid(tid)
+                a = totals.get(pid, 0.0)
                 color = COLORS[classify(a, glance_sec, engage_sec, strong_sec)] if facing else (90, 90, 230)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if facing else 2)
-                label = f"#{tid} looking {a:.1f}s" if facing else f"#{tid} {reason}"
+                label = f"#{pid} looking {a:.1f}s" if facing else f"#{pid} {reason}"
                 cv2.putText(frame, label, (x1, max(14, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
@@ -483,20 +525,29 @@ def process_video_job(
         writer.release()
 
         # ── Final results ────────────────────────────────────
+        groups: Dict[int, list] = {}
+        for tid in tracker.people:
+            groups.setdefault(gallery.pid(tid), []).append(tid)
+
         viewers = []
-        for tid, p in sorted(tracker.people.items(), key=lambda kv: kv[1]["first"]):
-            if p["attention"] < min_look_sec:
+        for pid, tids in sorted(groups.items(), key=lambda kv: min(tracker.people[t]["first"] for t in kv[1])):
+            ps = [tracker.people[t] for t in tids]
+            attention = sum(q["attention"] for q in ps)
+            if attention < min_look_sec:
                 continue
+            dist_t = sum(q["dist_t"] for q in ps)
             viewers.append({
-                "person_id":        tid,
-                "first_sec":        round(p["first"], 2),
-                "last_sec":         round(p["last"], 2),
-                "present_sec":      round(p["present"], 2),
-                "attention_sec":    round(p["attention"], 2),
-                "longest_look_sec": round(p["longest"], 2),
-                "looks":            p["looks"],
-                "speed":            round(AttentionTracker.speed(p), 2),
-                "behaviour":        classify(p["attention"], glance_sec, engage_sec, strong_sec),
+                "person_id":        pid,
+                "first_sec":        round(min(q["first"] for q in ps), 2),
+                "last_sec":         round(max(q["last"] for q in ps), 2),
+                "present_sec":      round(sum(q["present"] for q in ps), 2),
+                "attention_sec":    round(attention, 2),
+                "longest_look_sec": round(max(q["longest"] for q in ps), 2),
+                "looks":            sum(q["looks"] for q in ps),
+                "visits":           count_visits(ps, visit_gap),
+                "speed":            round(sum(q["dist"] for q in ps) / dist_t, 2) if dist_t > 0 else 0.0,
+                "behaviour":        classify(attention, glance_sec, engage_sec, strong_sec),
+                "track_ids":        sorted(tids),
                 "image":            "",
             })
 
@@ -504,7 +555,9 @@ def process_video_job(
         captured = []
         if capture:
             for v in viewers:
-                snap = snaps.get(v["person_id"])
+                # best snapshot over every tracker ID that belongs to this person
+                snap = max((snaps[t] for t in v["track_ids"] if t in snaps),
+                           key=lambda sn: sn["score"], default=None)
                 if v["behaviour"] not in (ENGAGED, STRONG) or snap is None:
                     continue
                 ok, jpg = cv2.imencode(".jpg", snap["img"], [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -526,7 +579,14 @@ def process_video_job(
         with open(Path(job_dir) / "viewers.csv", "w", newline="") as f:
             wr = csv.DictWriter(f, fieldnames=list(viewers[0].keys()) if viewers else ["person_id"])
             wr.writeheader()
-            wr.writerows(viewers)
+            wr.writerows({**v, "track_ids": ";".join(map(str, v["track_ids"]))} for v in viewers)
+
+        # Audit trail of every same-person decision
+        (Path(job_dir) / "reid.json").write_text(json.dumps({
+            "enabled": use_reid, "threshold": reid_thresh, "margin": reid_margin,
+            "tracks": len(tracker.people), "people": len(groups),
+            "decisions": gallery.log,
+        }, indent=2), encoding="utf-8")
 
         jobs.update(job_id, {
             "status":           "done",
@@ -542,7 +602,10 @@ def process_video_job(
                 "engage_sec":   engage_sec,
                 "strong_sec":   strong_sec,
                 "min_look_sec": min_look_sec,
-                "ignored":      len(tracker.people) - len(viewers),
+                "ignored":      len(groups) - len(viewers),
+                "tracks":       len(tracker.people),
+                "people":       len(groups),
+                "reid":         use_reid,
                 "captured":     len(captured),
             },
             "viewers": viewers,
