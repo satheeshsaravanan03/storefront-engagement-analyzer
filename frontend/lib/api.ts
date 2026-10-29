@@ -172,11 +172,13 @@ export interface LensMatch {
   source?: string;
   link?: string;
   thumbnail?: string;
+  is_video?: boolean;
 }
 
 export interface LensResult {
   image_url: string;
   search_url?: string;
+  description?: string | null;   // Google's AI overview of the image; absent in results saved by older versions
   visual_matches: LensMatch[];
 }
 

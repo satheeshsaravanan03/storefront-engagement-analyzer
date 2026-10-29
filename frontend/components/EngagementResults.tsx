@@ -1,10 +1,10 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { Clock, Users, TrendingUp, Zap, FileText, Download, Search, Loader2, ExternalLink, X } from 'lucide-react';
+import { Clock, Users, TrendingUp, Zap, FileText, Download, Search, Loader2, ExternalLink, X, Sparkles, Play } from 'lucide-react';
 import clsx from 'clsx';
 import { getLookup, runLookup } from '@/lib/api';
-import type { Behaviour, LensResult, Viewer } from '@/lib/api';
+import type { Behaviour, LensMatch, LensResult, Viewer } from '@/lib/api';
 
 export function classify(attention: number, glance: number, engage: number, strong: number): Behaviour {
   if (attention >= strong) return 'strong';
@@ -105,6 +105,8 @@ function LookupPanel({ personId, image, state, onClose }: {
 }) {
   const { busy, error, result } = state;
   const matches = result?.visual_matches ?? [];
+  const videos = matches.filter(m => m.is_video);
+  const pages = matches.filter(m => !m.is_video);
   return (
     <div className="bg-cv-bg/40 px-5 py-4">
       <div className="flex items-center gap-3 mb-3">
@@ -133,14 +135,45 @@ function LookupPanel({ personId, image, state, onClose }: {
       {error && <p className="text-red-400 text-xs">{error}</p>}
       {result && matches.length === 0 && <p className="text-cv-sub text-xs">No matches found.</p>}
 
+      {result?.description && (
+        <div className="mb-4 rounded-xl border border-cv-border bg-cv-card p-3">
+          <p className="text-cv-sub text-[11px] font-mono mb-1 flex items-center gap-1.5"><Sparkles size={12} /> GOOGLE AI DESCRIPTION</p>
+          <p className="text-cv-text text-sm leading-relaxed">{result.description}</p>
+          <p className="text-cv-sub text-[11px] mt-2">Summarised from the matches below. It describes the scene, may be wrong, and does not identify anyone.</p>
+        </div>
+      )}
+
+      {videos.length > 0 && (
+        <MatchGroup title={`Videos (${videos.length})`} matches={videos} limit={6} />
+      )}
+      {pages.length > 0 && (
+        <MatchGroup title={`Other pages (${pages.length})`} matches={pages} limit={6} />
+      )}
+    </div>
+  );
+}
+
+function MatchGroup({ title, matches, limit }: { title: string; matches: LensMatch[]; limit: number }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? matches : matches.slice(0, limit);
+  return (
+    <div className="mb-4">
+      <p className="text-cv-sub text-xs font-mono mb-2">{title.toUpperCase()}</p>
       <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
-        {matches.slice(0, 10).map((m, i) => (
+        {shown.map((m, i) => (
           <a key={i} href={m.link} target="_blank" rel="noopener noreferrer"
             className="flex gap-3 p-2 rounded-xl border border-cv-border bg-cv-card hover:border-cv-accent transition-colors">
-            {m.thumbnail ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={m.thumbnail} alt="" className="h-14 w-14 shrink-0 rounded-lg object-cover bg-cv-border" />
-            ) : <div className="h-14 w-14 shrink-0 rounded-lg bg-cv-border" />}
+            <div className="relative h-14 w-14 shrink-0">
+              {m.thumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.thumbnail} alt="" className="h-14 w-14 rounded-lg object-cover bg-cv-border" />
+              ) : <div className="h-14 w-14 rounded-lg bg-cv-border" />}
+              {m.is_video && (
+                <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/35">
+                  <Play size={16} className="text-white" fill="currentColor" />
+                </span>
+              )}
+            </div>
             <div className="min-w-0">
               <p className="text-cv-text text-xs leading-snug line-clamp-2">{m.title || m.link}</p>
               <p className="text-cv-sub text-[11px] font-mono mt-1 truncate">{m.source || hostOf(m.link)}</p>
@@ -148,6 +181,11 @@ function LookupPanel({ personId, image, state, onClose }: {
           </a>
         ))}
       </div>
+      {matches.length > limit && (
+        <button onClick={() => setAll(a => !a)} className="mt-2 text-cv-accent hover:text-cv-accentL text-xs font-mono">
+          {all ? 'Show fewer' : `Show all ${matches.length}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -169,7 +207,9 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
     if (lookups[personId]?.result) return;
     setLookups(l => ({ ...l, [personId]: { busy: true, error: '', result: null } }));
     try {
-      const result = (await getLookup(jobId, personId)) ?? (await runLookup(jobId, personId));
+      // results saved by an older version have no description field, so search again
+      const cached = await getLookup(jobId, personId);
+      const result = cached && 'description' in cached ? cached : await runLookup(jobId, personId);
       setLookups(l => ({ ...l, [personId]: { busy: false, error: '', result } }));
     } catch (e) {
       setLookups(l => ({ ...l, [personId]: { busy: false, error: e instanceof Error ? e.message : 'Lookup failed', result: null } }));
