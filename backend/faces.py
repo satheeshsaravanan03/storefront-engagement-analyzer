@@ -24,7 +24,9 @@ A match is deliberately conservative:
 """
 
 import json
+import threading
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -50,6 +52,7 @@ TOP_N = 3
 
 _detector = None
 _recognizer = None
+_registry_lock = threading.Lock()
 _cache: Dict[str, tuple] = {}   # photo path -> (mtime, embedding or None, face width)
 
 
@@ -117,7 +120,7 @@ def load_profiles() -> List[dict]:
         return []
     out = []
     for p in raw.get("profiles", []):
-        item = {k: p.get(k) for k in ("id", "name", "email", "phone", "role", "company", "notes")}
+        item = {k: p.get(k) for k in ("id", "name", "email", "phone", "role", "company", "notes", "registered_at")}
         item["photo"] = p.get("photo")
         item["embedding"], item["photo_status"], item["face_px"] = _photo_embedding(p.get("photo"))
         out.append(item)
@@ -137,6 +140,33 @@ def _photo_embedding(name: Optional[str]):
         emb, px = embed(img) if img is not None else (None, 0)
         hit = _cache[str(path)] = (mtime, emb, px)
     return hit[1], ("ok" if hit[1] is not None else "no_face"), hit[2]
+
+
+def add_profile(name: str, email: str, phone: str, role: str, company: str, photo: bytes) -> str:
+    """Register a new lead: store the photo as registry/photos/<id>.jpg and append the record. Returns the new id."""
+    img = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("The photo is not a readable image")
+    big = max(img.shape[:2])
+    if big > 1600:   # phone photos are huge; the matcher does not need them
+        img = cv2.resize(img, None, fx=1600 / big, fy=1600 / big, interpolation=cv2.INTER_AREA)
+    with _registry_lock:
+        try:
+            doc = json.loads(REGISTRY_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {"profiles": []}
+        numbers = [int(p["id"][1:]) for p in doc.get("profiles", []) if str(p.get("id", "")).startswith("P") and p["id"][1:].isdigit()]
+        pid = f"P{max(numbers, default=0) + 1:03d}"
+        PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(PHOTOS_DIR / f"{pid}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        doc.setdefault("profiles", []).append({
+            "id": pid, "name": name, "email": email, "phone": phone, "role": role, "company": company,
+            "photo": f"{pid}.jpg", "registered_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        tmp = REGISTRY_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        tmp.replace(REGISTRY_FILE)
+    return pid
 
 
 def public_profile(p: dict) -> dict:

@@ -3,14 +3,14 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Eye, Upload, List, Loader2, Contact } from 'lucide-react';
+import { Eye, Upload, List, Loader2, Users } from 'lucide-react';
 import clsx from 'clsx';
 import { checkBackendHealth } from '@/lib/api';
 
 const NAV = [
   { href: '/dashboard', label: 'Upload & Analyse', icon: Upload },
   { href: '/jobs',      label: 'Jobs',             icon: List },
-  { href: '/identity',  label: 'Identity',         icon: Contact },
+  { href: '/leads',     label: 'Leads',            icon: Users },
 ];
 
 function BackendStatus() {

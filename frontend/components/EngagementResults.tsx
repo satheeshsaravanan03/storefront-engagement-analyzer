@@ -4,6 +4,7 @@ import { Fragment, useState } from 'react';
 import { Clock, Users, TrendingUp, Zap, FileText, Download, Search, Loader2, ExternalLink, X, Sparkles, Play, ChevronDown, ChevronUp, Film } from 'lucide-react';
 import clsx from 'clsx';
 import { getDownloadUrl, getLookup, getMatchMeta, runLookup } from '@/lib/api';
+import { MatchedLeads } from '@/components/MatchedLeads';
 import type { Behaviour, LensMatch, LensResult, MatchMeta, Viewer } from '@/lib/api';
 
 export function classify(attention: number, glance: number, engage: number, strong: number): Behaviour {
@@ -363,7 +364,7 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
 
 /* The video exactly as it was uploaded, shown under the viewers table. */
 export function UploadedVideo({ jobId, filename }: { jobId: string; filename?: string }) {
-  const [open, setOpen] = useState(false);   // closed by default; the video only loads once opened
+  const [open, setOpen] = useState(true);    // open by default; collapse it to hide the player
   const [failed, setFailed] = useState(false);
   const src = getDownloadUrl(jobId, 'original');
   return (
@@ -402,6 +403,7 @@ export function EngagementResults(p: Thresholds & {
     <div className="space-y-4">
       <SummaryCards {...p} />
       <ViewersTable {...p} />
+      {p.jobId && <MatchedLeads jobId={p.jobId} />}
       {p.jobId && <UploadedVideo jobId={p.jobId} filename={p.filename} />}
     </div>
   );

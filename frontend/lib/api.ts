@@ -226,6 +226,7 @@ export interface RegisteredProfile {
   role?: string | null;
   company?: string | null;
   photo?: string | null;
+  registered_at?: string | null;   // ISO time the lead was registered
   photo_status: 'ok' | 'no_photo' | 'missing' | 'no_face';
   face_px: number;
 }
@@ -252,6 +253,15 @@ export interface IdentityResult {
 export async function listRegistry(): Promise<RegisteredProfile[]> {
   const res = await fetch(`${BACKEND}/api/registry`, { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to load the registry');
+  return res.json();
+}
+
+export async function registerLead(form: FormData): Promise<RegisteredProfile> {
+  const res = await fetch(`${BACKEND}/api/registry`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Could not register the lead' }));
+    throw new Error(err.detail || 'Could not register the lead');
+  }
   return res.json();
 }
 

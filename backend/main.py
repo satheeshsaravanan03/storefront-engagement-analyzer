@@ -313,6 +313,33 @@ async def list_registry():
     return [faces.public_profile(p) for p in profiles]
 
 
+@app.post("/api/registry")
+async def register_lead(
+    name: str = Form(...),
+    email: str = Form(""),
+    phone: str = Form(""),
+    role: str = Form(""),
+    company: str = Form(""),
+    photo: UploadFile = File(...),
+):
+    """Register one person with their photo (they have agreed to be recognised at the event)."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, detail="Name is required")
+    data = await photo.read()
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(400, detail="Attach a photo of up to 15 MB")
+    loop = asyncio.get_event_loop()
+    try:
+        pid = await loop.run_in_executor(
+            None, faces.add_profile, name[:120], email.strip()[:160], phone.strip()[:40],
+            role.strip()[:120], company.strip()[:120], data)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    profiles = await loop.run_in_executor(None, faces.load_profiles)
+    return next(faces.public_profile(p) for p in profiles if p["id"] == pid)
+
+
 @app.get("/api/registry/photo/{profile_id}")
 async def registry_photo(profile_id: str):
     """Serve the registered photo of one person (only files named in the registry)."""
