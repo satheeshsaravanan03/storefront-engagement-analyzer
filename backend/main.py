@@ -50,6 +50,7 @@ _load_env_file()
 
 # Import the processing pipeline
 from processor import process_video_job, JobStore
+import faces
 import meta
 import serp
 
@@ -194,6 +195,13 @@ async def run_processing(job_id: str, video_path: str, job_dir: Path, config: di
         )
     except Exception as e:
         jobs.update(job_id, {"status": "error", "error": str(e)})
+    else:
+        # Match the captured faces against the registry; never let this fail the job
+        try:
+            if (jobs.get(job_id) or {}).get("status") == "done":
+                await loop.run_in_executor(None, faces.identify_job, job_dir)
+        except Exception as e:
+            print(f"[faces] matching failed for {job_id}: {e}")
     _save_job(job_id)
 
 
@@ -295,6 +303,50 @@ async def get_lookup(job_id: str, person_id: int):
     if not path.is_file():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/registry")
+async def list_registry():
+    """Registered people (static data from registry/profiles.json) and the state of their photo."""
+    loop = asyncio.get_event_loop()
+    profiles = await loop.run_in_executor(None, faces.load_profiles)
+    return [faces.public_profile(p) for p in profiles]
+
+
+@app.get("/api/registry/photo/{profile_id}")
+async def registry_photo(profile_id: str):
+    """Serve the registered photo of one person (only files named in the registry)."""
+    for p in faces.load_profiles():
+        if p["id"] == profile_id and p["photo"]:
+            path = (faces.PHOTOS_DIR / p["photo"]).resolve()
+            if faces.PHOTOS_DIR.resolve() in path.parents and path.is_file():
+                return FileResponse(str(path))
+    raise HTTPException(404, detail="No photo")
+
+
+@app.post("/api/jobs/{job_id}/identify")
+async def identify_job(job_id: str):
+    """(Re)match the captured snapshots of a finished job against the registry."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    if job.get("status") != "done":
+        raise HTTPException(409, detail="Job is not finished")
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, faces.identify_job, Path(job["job_dir"]))
+    except Exception as e:
+        raise HTTPException(500, detail=f"Face matching failed: {e}")
+
+
+@app.get("/api/jobs/{job_id}/identify")
+async def get_identities(job_id: str):
+    """The saved matching result of a job, or null if it has not been run."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    path = Path(job["job_dir"]) / "identities.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
 @app.get("/api/status/{job_id}")

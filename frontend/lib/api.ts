@@ -217,6 +217,61 @@ export async function getLookup(jobId: string, personId: number): Promise<LensRe
   return res.ok ? ((await res.json()) as LensResult | null) : null;
 }
 
+/* ── Face matching against the registered people ─────────── */
+export interface RegisteredProfile {
+  id: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  role?: string | null;
+  company?: string | null;
+  photo?: string | null;
+  photo_status: 'ok' | 'no_photo' | 'missing' | 'no_face';
+  face_px: number;
+}
+
+export type IdentityStatus = 'matched' | 'possible' | 'unmatched' | 'no_face';
+
+export interface IdentityPerson {
+  person_id: number;
+  image: string;                       // snapshot path relative to the job folder
+  status: IdentityStatus;
+  score: number | null;                // cosine similarity of the best candidate
+  profile_id: string | null;           // set for matched / possible
+  face_px: number;
+  candidates: { profile_id: string; score: number }[];
+}
+
+export interface IdentityResult {
+  registry_size: number;
+  with_photo: number;
+  thresholds: { match: number; possible: number; margin: number };
+  people: IdentityPerson[];
+}
+
+export async function listRegistry(): Promise<RegisteredProfile[]> {
+  const res = await fetch(`${BACKEND}/api/registry`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load the registry');
+  return res.json();
+}
+
+export async function getIdentities(jobId: string): Promise<IdentityResult | null> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}/identify`, { cache: 'no-store' });
+  return res.ok ? ((await res.json()) as IdentityResult | null) : null;
+}
+
+export async function runIdentify(jobId: string): Promise<IdentityResult> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}/identify`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Matching failed' }));
+    throw new Error(err.detail || 'Matching failed');
+  }
+  return res.json();
+}
+
+export const registryPhotoUrl = (id: string) => `${BACKEND}/api/registry/photo/${id}`;
+export const jobFileUrl = (jobId: string, path: string) => `${BACKEND}/api/file/${jobId}/${path}`;
+
 /* ── Health check ─────────────────────────────────────────── */
 export async function checkBackendHealth(): Promise<boolean> {
   try {

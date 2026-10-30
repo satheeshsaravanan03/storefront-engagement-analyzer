@@ -1,0 +1,95 @@
+{
+  "_note": "Placeholder data. Put one clear face photo per person in registry/photos/ named as the 'photo' field, then edit name/email/phone here.",
+  "profiles": [
+    {
+      "id": "P001",
+      "name": "Aarav Sharma",
+      "email": "aarav.sharma@example.com",
+      "phone": "+91 90000 00001",
+      "role": "Product Designer",
+      "company": "Northwind Labs",
+      "photo": "P001.jpg"
+    },
+    {
+      "id": "P002",
+      "name": "Meera Iyer",
+      "email": "meera.iyer@example.com",
+      "phone": "+91 90000 00002",
+      "role": "Data Analyst",
+      "company": "Bluepeak Analytics",
+      "photo": "P002.jpg"
+    },
+    {
+      "id": "P003",
+      "name": "Rohan Verma",
+      "email": "rohan.verma@example.com",
+      "phone": "+91 90000 00003",
+      "role": "Backend Engineer",
+      "company": "Cloudnine Tech",
+      "photo": "P003.jpg"
+    },
+    {
+      "id": "P004",
+      "name": "Sneha Kapoor",
+      "email": "sneha.kapoor@example.com",
+      "phone": "+91 90000 00004",
+      "role": "Marketing Lead",
+      "company": "Brightway Media",
+      "photo": "P004.jpg"
+    },
+    {
+      "id": "P005",
+      "name": "Karthik Raman",
+      "email": "karthik.raman@example.com",
+      "phone": "+91 90000 00005",
+      "role": "QA Engineer",
+      "company": "Softline Systems",
+      "photo": "P005.jpg"
+    },
+    {
+      "id": "P006",
+      "name": "Divya Nair",
+      "email": "divya.nair@example.com",
+      "phone": "+91 90000 00006",
+      "role": "HR Manager",
+      "company": "Orbit Consulting",
+      "photo": "P006.jpg"
+    },
+    {
+      "id": "P007",
+      "name": "Arjun Mehta",
+      "email": "arjun.mehta@example.com",
+      "phone": "+91 90000 00007",
+      "role": "Sales Executive",
+      "company": "Zenith Retail",
+      "photo": "P007.jpg"
+    },
+    {
+      "id": "P008",
+      "name": "Priya Menon",
+      "email": "priya.menon@example.com",
+      "phone": "+91 90000 00008",
+      "role": "UX Researcher",
+      "company": "Pixelcraft Studio",
+      "photo": "P008.jpg"
+    },
+    {
+      "id": "P009",
+      "name": "Vikram Singh",
+      "email": "vikram.singh@example.com",
+      "phone": "+91 90000 00009",
+      "role": "DevOps Engineer",
+      "company": "Stackworks",
+      "photo": "P009.jpg"
+    },
+    {
+      "id": "P010",
+      "name": "Ananya Das",
+      "email": "ananya.das@example.com",
+      "phone": "+91 90000 00010",
+      "role": "Project Manager",
+      "company": "Horizon Infra",
+      "photo": "P010.jpg"
+    }
+  ]
+}

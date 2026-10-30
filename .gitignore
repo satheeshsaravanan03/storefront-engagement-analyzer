@@ -43,3 +43,8 @@ backend/yolov8m.pt
 
 # Playwright MCP test artifacts
 .playwright-mcp/
+
+# Face-match: downloaded models and registered people photos (personal data)
+backend/models/
+backend/registry/photos/*
+!backend/registry/photos/.gitkeep
