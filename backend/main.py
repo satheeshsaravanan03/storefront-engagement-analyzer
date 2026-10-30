@@ -50,6 +50,7 @@ _load_env_file()
 
 # Import the processing pipeline
 from processor import process_video_job, JobStore
+import meta
 import serp
 
 # ── App setup ─────────────────────────────────────────────────
@@ -262,15 +263,37 @@ async def lookup_person(job_id: str, person_id: int):
     return result
 
 
-@app.get("/api/jobs/{job_id}/lookup/{person_id}")
-async def get_lookup(job_id: str, person_id: int):
-    """Return the cached SerpAPI result for a snapshot, if one was run."""
+@app.post("/api/jobs/{job_id}/lookup/{person_id}/meta/{index}")
+async def lookup_match_meta(job_id: str, person_id: int, index: int):
+    """Fetch public metadata (account, caption, date) for one saved Lens match and cache it.
+
+    Only links already saved in the lookup are fetched, never a URL supplied by the client."""
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
     path = Path(job["job_dir"]) / "lookups" / f"person_{person_id}.json"
     if not path.is_file():
         raise HTTPException(404, detail="No lookup yet")
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    matches = doc.get("visual_matches") or []
+    if not 0 <= index < len(matches):
+        raise HTTPException(404, detail="No such match")
+    if not matches[index].get("meta"):
+        loop = asyncio.get_event_loop()
+        matches[index]["meta"] = await loop.run_in_executor(None, meta.page_metadata, matches[index]["link"])
+        path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return matches[index]["meta"]
+
+
+@app.get("/api/jobs/{job_id}/lookup/{person_id}")
+async def get_lookup(job_id: str, person_id: int):
+    """Return the cached SerpAPI result for a snapshot, or null if none was run yet."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    path = Path(job["job_dir"]) / "lookups" / f"person_{person_id}.json"
+    if not path.is_file():
+        return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -356,9 +379,12 @@ async def download_file(job_id: str, file_type: str, request: Request):
                             media_type="application/zip",
                             headers={"Access-Control-Allow-Origin": "*"})
 
+    original = next(iter(sorted(job_dir.glob("input.*"))), job_dir / "input.mp4")
     file_map = {
-        "video":   (job_dir / "annotated.mp4",  "video/mp4"),
-        "csv":     (job_dir / "viewers.csv",      "text/csv"),
+        "video":    (job_dir / "annotated.mp4",  "video/mp4"),
+        "original": (original, {".webm": "video/webm", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
+                                ".avi": "video/x-msvideo"}.get(original.suffix.lower(), "video/mp4")),
+        "csv":      (job_dir / "viewers.csv",      "text/csv"),
     }
     item = file_map.get(file_type)
     if not item:
@@ -372,7 +398,7 @@ async def download_file(job_id: str, file_type: str, request: Request):
 
     # Range request support — required for browser <video> tag seek/stream
     range_header = request.headers.get("range")
-    if range_header and file_type == "video":
+    if range_header and file_type in ("video", "original"):
         try:
             range_val = range_header.replace("bytes=", "")
             parts = range_val.split("-")

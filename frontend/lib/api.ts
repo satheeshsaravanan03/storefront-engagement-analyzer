@@ -22,6 +22,7 @@ export interface Viewer {
 
 export interface AnalysisResult {
   job_id: string;
+  filename?: string;         // name of the uploaded video
   status: 'queued' | 'processing' | 'done' | 'error';
   progress: number;          // 0–100
   total_frames: number;
@@ -167,12 +168,26 @@ export async function deleteJob(jobId: string): Promise<void> {
 }
 
 /* ── SerpAPI snapshot lookup (Google Lens) ────────────────── */
+/* Public details of a matched page: account/channel, caption, publish date. */
+export interface MatchMeta {
+  platform: string;
+  title?: string | null;
+  author?: string | null;
+  author_url?: string | null;
+  description?: string | null;
+  published?: string | null;
+  source?: 'oembed' | 'opengraph' | null;
+  found: boolean;
+  error?: string;
+}
+
 export interface LensMatch {
   title?: string;
   source?: string;
   link?: string;
   thumbnail?: string;
   is_video?: boolean;
+  meta?: MatchMeta;
 }
 
 export interface LensResult {
@@ -191,9 +206,15 @@ export async function runLookup(jobId: string, personId: number): Promise<LensRe
   return res.json();
 }
 
+export async function getMatchMeta(jobId: string, personId: number, index: number): Promise<MatchMeta> {
+  const res = await fetch(`${BACKEND}/api/jobs/${jobId}/lookup/${personId}/meta/${index}`, { method: 'POST' });
+  if (!res.ok) throw new Error('Could not load details');
+  return res.json();
+}
+
 export async function getLookup(jobId: string, personId: number): Promise<LensResult | null> {
   const res = await fetch(`${BACKEND}/api/jobs/${jobId}/lookup/${personId}`, { cache: 'no-store' });
-  return res.ok ? res.json() : null;
+  return res.ok ? ((await res.json()) as LensResult | null) : null;
 }
 
 /* ── Health check ─────────────────────────────────────────── */
@@ -207,6 +228,6 @@ export async function checkBackendHealth(): Promise<boolean> {
 }
 
 /* ── Download helpers ─────────────────────────────────────── */
-export function getDownloadUrl(jobId: string, file: 'video' | 'csv' | 'zip'): string {
+export function getDownloadUrl(jobId: string, file: 'video' | 'original' | 'csv' | 'zip'): string {
   return `${BACKEND}/api/download/${jobId}/${file}`;
 }

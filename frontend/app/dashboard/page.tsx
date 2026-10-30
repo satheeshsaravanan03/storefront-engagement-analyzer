@@ -8,7 +8,7 @@ import {
   ChevronDown, Plus,
 } from 'lucide-react';
 import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult } from '@/lib/api';
-import { SummaryCards, ViewersTable } from '@/components/EngagementResults';
+import { SummaryCards, UploadedVideo, ViewersTable } from '@/components/EngagementResults';
 import { AppShell } from '@/components/AppShell';
 import clsx from 'clsx';
 
@@ -537,6 +537,10 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
           imageBase={`${BACKEND}/api/file/${jobId}/`}
           jobId={jobId}
         />
+      </motion.div>
+
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+        <UploadedVideo jobId={jobId} filename={result.filename} />
       </motion.div>
     </div>
   );

@@ -3,6 +3,9 @@ const nextConfig = {
   // Strict mode causes double-mount which breaks video autoplay
   reactStrictMode: false,
 
+  // Lets a production build for a demo live beside the running dev server
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
   // Explicitly set video MIME type — fixes Windows dev server serving mp4 wrong
   async headers() {
     return [
