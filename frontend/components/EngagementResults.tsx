@@ -363,16 +363,19 @@ export function ViewersTable({ viewers, glanceSec, engageSec, strongSec, csvUrl,
 
 /* The video exactly as it was uploaded, shown under the viewers table. */
 export function UploadedVideo({ jobId, filename }: { jobId: string; filename?: string }) {
+  const [open, setOpen] = useState(false);   // closed by default; the video only loads once opened
   const [failed, setFailed] = useState(false);
   const src = getDownloadUrl(jobId, 'original');
   return (
     <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
-      <div className="px-5 py-3 border-b border-cv-border flex items-center gap-2">
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className={clsx('w-full px-5 py-3 flex items-center gap-2 text-left', open && 'border-b border-cv-border')}>
         <Film size={15} className="text-cv-accent" />
         <span className="font-semibold text-cv-text text-sm">Uploaded video</span>
         {filename && <span className="text-cv-sub text-xs font-mono ml-auto truncate">{filename}</span>}
-      </div>
-      {failed ? (
+        <ChevronDown size={16} className={clsx('text-cv-sub shrink-0 transition-transform', !filename && 'ml-auto', open && 'rotate-180')} />
+      </button>
+      {open && (failed ? (
         <p className="px-5 py-6 text-cv-sub text-xs">
           This file format can&rsquo;t be played in the browser.{' '}
           <a href={src} className="text-cv-accent hover:text-cv-accentL">Download the original</a>
@@ -380,7 +383,7 @@ export function UploadedVideo({ jobId, filename }: { jobId: string; filename?: s
       ) : (
         <video src={src} controls preload="metadata" playsInline onError={() => setFailed(true)}
           className="w-full bg-black" style={{ maxHeight: 420 }} />
-      )}
+      ))}
     </div>
   );
 }
