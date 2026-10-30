@@ -370,10 +370,10 @@ export function UploadedVideo({ jobId, filename }: { jobId: string; filename?: s
     <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
       <button onClick={() => setOpen(o => !o)} aria-expanded={open}
         className={clsx('w-full px-5 py-3 flex items-center gap-2 text-left', open && 'border-b border-cv-border')}>
-        <Film size={15} className="text-cv-accent" />
-        <span className="font-semibold text-cv-text text-sm">Uploaded video</span>
-        {filename && <span className="text-cv-sub text-xs font-mono ml-auto truncate">{filename}</span>}
-        <ChevronDown size={16} className={clsx('text-cv-sub shrink-0 transition-transform', !filename && 'ml-auto', open && 'rotate-180')} />
+        <Film size={15} className="text-cv-accent shrink-0" />
+        <span className="font-semibold text-cv-text text-sm whitespace-nowrap shrink-0">Uploaded video</span>
+        <span title={filename} className="flex-1 min-w-0 pl-10 text-right text-cv-sub text-xs font-mono truncate">{filename}</span>
+        <ChevronDown size={16} className={clsx('text-cv-sub shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (failed ? (
         <p className="px-5 py-6 text-cv-sub text-xs">
