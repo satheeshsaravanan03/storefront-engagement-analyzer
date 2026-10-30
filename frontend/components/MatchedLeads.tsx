@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, Mail, Phone, Briefcase, UserX, ImageOff, ScanFace } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, RefreshCw, Mail, Phone, Briefcase, UserX, ImageOff, ScanFace, ChevronLeft, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import {
   getIdentities, listRegistry, runIdentify, registryPhotoUrl, jobFileUrl,
@@ -63,72 +63,81 @@ export function ContactLines({ profile }: { profile: RegisteredProfile }) {
   );
 }
 
-/* One viewer: the captured snapshot next to the registered photo and details */
+/* One viewer as an ID card: the captured snapshot full width, the registered person below it */
 function LeadCard({ jobId, person, byId }: { jobId: string; person: IdentityPerson; byId: Map<string, RegisteredProfile> }) {
   const profile = person.profile_id ? byId.get(person.profile_id) : undefined;
   const pct = person.score != null ? Math.round(Math.max(0, person.score) * 100) : null;
   const closest = !profile && person.status === 'unmatched' && person.candidates[0]
     ? byId.get(person.candidates[0].profile_id) : undefined;
+  const row = 'flex items-center gap-2.5 text-sm text-cv-text min-w-0';
 
   return (
-    <div className="glow-border bg-cv-card rounded-2xl overflow-hidden flex flex-col">
-      <div className="grid grid-cols-2 gap-px bg-cv-border">
-        <div className="relative bg-cv-black">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={jobFileUrl(jobId, person.image)} alt={`Viewer ${person.person_id}`}
-            className="w-full h-44 object-cover object-top" />
-          <span className="absolute left-2 bottom-2 text-[10px] font-semibold tracking-wider bg-black/60 text-white rounded px-1.5 py-0.5">
-            CAPTURED · #{person.person_id}
-          </span>
-        </div>
-        <div className="relative bg-cv-black">
-          {profile ? (
-            <>
-              <Avatar profile={profile} className="w-full h-44 text-4xl" />
-              <span className="absolute left-2 bottom-2 text-[10px] font-semibold tracking-wider bg-black/60 text-white rounded px-1.5 py-0.5">
-                REGISTERED
-              </span>
-            </>
-          ) : (
-            <div className="w-full h-44 flex items-center justify-center">
-              {person.status === 'no_face' ? <ImageOff size={26} className="text-cv-sub" /> : <UserX size={26} className="text-cv-red" />}
-            </div>
+    <div data-card className="glow-border bg-cv-card rounded-2xl overflow-hidden flex flex-col shrink-0 snap-start w-[280px]">
+      <div className="relative h-56 bg-cv-black">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={jobFileUrl(jobId, person.image)} alt={`Viewer ${person.person_id}`}
+          className="w-full h-full object-cover object-top" />
+        <div className="absolute inset-x-0 top-0 p-3 flex items-start justify-between bg-gradient-to-b from-black/50 to-transparent">
+          <span className="text-[11px] font-semibold tracking-wide text-white">VIEWER #{person.person_id}</span>
+          {pct != null && person.status !== 'no_face' && (
+            <span className="text-[11px] font-mono font-semibold text-white bg-black/40 rounded-full px-2 py-0.5">{pct}%</span>
           )}
         </div>
       </div>
 
-      <div className="p-4 flex-1 flex flex-col gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <StatusBadge status={person.status} />
-          {pct != null && person.status !== 'no_face' && (
-            <span className="ml-auto text-cv-sub text-xs font-mono">similarity {pct}%</span>
+      <div className="px-4 pb-4 flex-1 flex flex-col">
+        {/* the avatar overlaps the photo edge; the same slot for every status so cards line up */}
+        <div className="relative z-10 flex items-end gap-3 -mt-7">
+          {profile ? (
+            <Avatar profile={profile} className="w-14 h-14 rounded-full ring-4 ring-white text-lg shrink-0" />
+          ) : (
+            <div className="w-14 h-14 rounded-full ring-4 ring-white bg-cv-black flex items-center justify-center shrink-0">
+              {person.status === 'no_face' ? <ImageOff size={20} className="text-cv-sub" /> : <UserX size={20} className="text-cv-red" />}
+            </div>
+          )}
+          <div className="pb-1"><StatusBadge status={person.status} /></div>
+        </div>
+
+        <div className="mt-3 min-h-[28px]">
+          {profile ? (
+            <>
+              <p className="font-display text-xl text-cv-text leading-tight truncate" title={profile.name}>{profile.name}</p>
+              <p className="text-cv-sub text-xs font-mono mt-0.5">{profile.id}</p>
+            </>
+          ) : (
+            <p className="font-semibold text-cv-text text-sm">
+              {person.status === 'no_face' ? 'No clear face' : 'Not in the registered list'}
+            </p>
           )}
         </div>
 
-        {profile ? (
-          <>
-            <div className="min-w-0">
-              <p className="font-display text-xl text-cv-text leading-tight truncate">{profile.name}</p>
-              <p className="text-cv-sub text-xs font-mono">{profile.id}</p>
-            </div>
-            <ContactLines profile={profile} />
-            {person.status === 'possible' && (
-              <p className="text-xs text-cv-amber">Please confirm: the score is below the confident-match level.</p>
-            )}
-          </>
-        ) : (
-          <div>
-            <p className="font-semibold text-cv-text text-sm">
-              {person.status === 'no_face' ? 'No clear face in this snapshot' : 'Unmatched: not in the registered list'}
-            </p>
-            <p className="text-cv-sub text-xs mt-1">
+        <div className="mt-4 pt-4 border-t border-cv-border space-y-2.5 flex-1">
+          {profile ? (
+            <>
+              <p className={row}><Briefcase size={14} className="text-cv-sub shrink-0" />
+                <span className="truncate" title={[profile.role, profile.company].filter(Boolean).join(' · ')}>
+                  {profile.role || '–'}{profile.company ? ` · ${profile.company}` : ''}</span></p>
+              <p className={row}><Mail size={14} className="text-cv-sub shrink-0" />
+                {profile.email
+                  ? <a href={`mailto:${profile.email}`} title={profile.email} className="truncate hover:text-cv-accent">{profile.email}</a>
+                  : <span className="text-cv-sub">–</span>}</p>
+              <p className={row}><Phone size={14} className="text-cv-sub shrink-0" />
+                {profile.phone
+                  ? <a href={`tel:${profile.phone.replace(/\s/g, '')}`} className="truncate hover:text-cv-accent">{profile.phone}</a>
+                  : <span className="text-cv-sub">–</span>}</p>
+              {person.status === 'possible' && (
+                <p className="text-xs text-cv-amber pt-1">Please confirm: below the confident-match level.</p>
+              )}
+            </>
+          ) : (
+            <p className="text-cv-sub text-xs leading-relaxed">
               {person.status === 'no_face'
                 ? 'The face is too small, turned away or blurred to compare.'
                 : 'No registered lead looks like this viewer closely enough to name them.'}
               {closest && ` Closest was ${closest.name} (${Math.round(Math.max(0, person.score ?? 0) * 100)}%).`}
             </p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -143,6 +152,21 @@ export function MatchedLeads({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const byId = useMemo(() => new Map(registry.map(p => [p.id, p])), [registry]);
+
+  // Cards sit in one scrollable row; the arrows page through it
+  const rail = useRef<HTMLDivElement>(null);
+  const [edge, setEdge] = useState({ start: true, end: true });
+  const measure = useCallback(() => {
+    const el = rail.current;
+    if (el) setEdge({ start: el.scrollLeft < 4, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 });
+  }, []);
+  const page = (dir: 1 | -1) => {
+    const el = rail.current;
+    const card = el?.querySelector<HTMLElement>('[data-card]');
+    if (!el || !card) return;
+    const step = card.offsetWidth + 16;
+    el.scrollBy({ left: dir * step * Math.max(1, Math.floor(el.clientWidth / step)), behavior: 'smooth' });
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -171,6 +195,12 @@ export function MatchedLeads({ jobId }: { jobId: string }) {
     () => [...(result?.people ?? [])].sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.person_id - b.person_id),
     [result]);
   const matched = people.filter(p => p.status === 'matched').length;
+  useEffect(() => {
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [measure, people.length, loading]);
+  const scrollable = !edge.start || !edge.end;
 
   return (
     <div className="glow-border bg-cv-card rounded-2xl overflow-hidden">
@@ -182,6 +212,16 @@ export function MatchedLeads({ jobId }: { jobId: string }) {
           className="ml-auto flex items-center gap-1.5 text-xs font-medium text-cv-sub hover:text-cv-text disabled:opacity-50 transition-colors">
           {running ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Re-run matching
         </button>
+        {scrollable && (
+          <div className="flex gap-1.5">
+            <button onClick={() => page(-1)} disabled={edge.start} aria-label="Previous"
+              className="w-8 h-8 rounded-full border border-cv-border flex items-center justify-center text-cv-text hover:border-cv-accent/50 disabled:opacity-30 disabled:hover:border-cv-border transition-colors">
+              <ChevronLeft size={16} /></button>
+            <button onClick={() => page(1)} disabled={edge.end} aria-label="Next"
+              className="w-8 h-8 rounded-full border border-cv-border flex items-center justify-center text-cv-text hover:border-cv-accent/50 disabled:opacity-30 disabled:hover:border-cv-border transition-colors">
+              <ChevronRight size={16} /></button>
+          </div>
+        )}
       </div>
 
       <div className="p-5">
@@ -198,7 +238,8 @@ export function MatchedLeads({ jobId }: { jobId: string }) {
                 None of the registered leads has a photo yet, so nobody can be matched. Add photos on the Leads page.
               </p>
             )}
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div ref={rail} onScroll={measure}
+              className="flex gap-4 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {people.map(p => <LeadCard key={p.person_id} jobId={jobId} person={p} byId={byId} />)}
             </div>
           </>
