@@ -3,11 +3,11 @@
   "profiles": [
     {
       "id": "P001",
-      "name": "Aarav Sharma",
-      "email": "aarav.sharma@example.com",
+      "name": "Sneha Kapoor",
+      "email": "sneha.kapoor@example.com",
       "phone": "+91 90000 00001",
-      "role": "Product Designer",
-      "company": "Northwind Labs",
+      "role": "Marketing Lead",
+      "company": "Brightway Media",
       "photo": "P001.jpg",
       "registered_at": "2026-10-30T09:30:00"
     },
@@ -33,73 +33,23 @@
     },
     {
       "id": "P004",
-      "name": "Sneha Kapoor",
-      "email": "sneha.kapoor@example.com",
+      "name": "Karthik Raman",
+      "email": "karthik.raman@example.com",
       "phone": "+91 90000 00004",
-      "role": "Marketing Lead",
-      "company": "Brightway Media",
+      "role": "QA Engineer",
+      "company": "Softline Systems",
       "photo": "P004.jpg",
       "registered_at": "2026-10-30T10:21:00"
     },
     {
       "id": "P005",
-      "name": "Karthik Raman",
-      "email": "karthik.raman@example.com",
-      "phone": "+91 90000 00005",
-      "role": "QA Engineer",
-      "company": "Softline Systems",
-      "photo": "P005.jpg",
-      "registered_at": "2026-10-30T10:38:00"
-    },
-    {
-      "id": "P006",
-      "name": "Divya Nair",
-      "email": "divya.nair@example.com",
-      "phone": "+91 90000 00006",
-      "role": "HR Manager",
-      "company": "Orbit Consulting",
-      "photo": "P006.jpg",
-      "registered_at": "2026-10-30T10:55:00"
-    },
-    {
-      "id": "P007",
       "name": "Arjun Mehta",
       "email": "arjun.mehta@example.com",
-      "phone": "+91 90000 00007",
+      "phone": "+91 90000 00005",
       "role": "Sales Executive",
       "company": "Zenith Retail",
-      "photo": "P007.jpg",
-      "registered_at": "2026-10-30T11:12:00"
-    },
-    {
-      "id": "P008",
-      "name": "Priya Menon",
-      "email": "priya.menon@example.com",
-      "phone": "+91 90000 00008",
-      "role": "UX Researcher",
-      "company": "Pixelcraft Studio",
-      "photo": "P008.jpg",
-      "registered_at": "2026-10-30T11:29:00"
-    },
-    {
-      "id": "P009",
-      "name": "Vikram Singh",
-      "email": "vikram.singh@example.com",
-      "phone": "+91 90000 00009",
-      "role": "DevOps Engineer",
-      "company": "Stackworks",
-      "photo": "P009.jpg",
-      "registered_at": "2026-10-30T11:46:00"
-    },
-    {
-      "id": "P010",
-      "name": "Ananya Das",
-      "email": "ananya.das@example.com",
-      "phone": "+91 90000 00010",
-      "role": "Project Manager",
-      "company": "Horizon Infra",
-      "photo": "P010.jpg",
-      "registered_at": "2026-10-30T12:03:00"
+      "photo": "P005.jpg",
+      "registered_at": "2026-10-30T10:38:00"
     }
   ]
 }
