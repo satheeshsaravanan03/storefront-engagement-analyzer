@@ -402,8 +402,8 @@ export function EngagementResults(p: Thresholds & {
   return (
     <div className="space-y-4">
       <SummaryCards {...p} />
-      <ViewersTable {...p} />
       {p.jobId && <MatchedLeads jobId={p.jobId} />}
+      <ViewersTable {...p} />
       {p.jobId && <UploadedVideo jobId={p.jobId} filename={p.filename} />}
     </div>
   );

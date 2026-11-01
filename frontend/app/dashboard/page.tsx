@@ -527,6 +527,10 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
         </motion.div>
       )}
 
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+        <MatchedLeads jobId={jobId} />
+      </motion.div>
+
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
         <ViewersTable
           viewers={result.viewers ?? []}
@@ -538,10 +542,6 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
           imageBase={`${BACKEND}/api/file/${jobId}/`}
           jobId={jobId}
         />
-      </motion.div>
-
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
-        <MatchedLeads jobId={jobId} />
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>

@@ -74,11 +74,17 @@ function LeadCard({ jobId, person, byId }: { jobId: string; person: IdentityPers
   return (
     <div data-card className="glow-border bg-cv-card rounded-2xl overflow-hidden flex flex-col shrink-0 snap-start w-[280px]">
       <div className="relative h-56 bg-cv-black">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={jobFileUrl(jobId, person.image)} alt={`Viewer ${person.person_id}`}
-          className="w-full h-full object-cover object-top" />
+        {profile ? (
+          <Avatar profile={profile} className="w-full h-full text-6xl" />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={jobFileUrl(jobId, person.image)} alt={`Viewer ${person.person_id}`}
+            className="w-full h-full object-cover object-top" />
+        )}
         <div className="absolute inset-x-0 top-0 p-3 flex items-start justify-between bg-gradient-to-b from-black/50 to-transparent">
-          <span className="text-[11px] font-semibold tracking-wide text-white">VIEWER #{person.person_id}</span>
+          <span className="text-[11px] font-semibold tracking-wide text-white">
+            {profile ? 'REGISTERED' : `VIEWER #${person.person_id}`}
+          </span>
           {pct != null && person.status !== 'no_face' && (
             <span className="text-[11px] font-mono font-semibold text-white bg-black/40 rounded-full px-2 py-0.5">{pct}%</span>
           )}
@@ -89,13 +95,17 @@ function LeadCard({ jobId, person, byId }: { jobId: string; person: IdentityPers
         {/* the avatar overlaps the photo edge; the same slot for every status so cards line up */}
         <div className="relative z-10 flex items-end gap-3 -mt-7">
           {profile ? (
-            <Avatar profile={profile} className="w-14 h-14 rounded-full ring-4 ring-white text-lg shrink-0" />
+            // the captured snapshot, small, so it can be compared with the registered photo above
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={jobFileUrl(jobId, person.image)} alt={`Captured viewer ${person.person_id}`}
+              className="w-14 h-14 rounded-full ring-4 ring-white object-cover object-top bg-cv-black shrink-0" />
           ) : (
             <div className="w-14 h-14 rounded-full ring-4 ring-white bg-cv-black flex items-center justify-center shrink-0">
               {person.status === 'no_face' ? <ImageOff size={20} className="text-cv-sub" /> : <UserX size={20} className="text-cv-red" />}
             </div>
           )}
           <div className="pb-1"><StatusBadge status={person.status} /></div>
+          {profile && <span className="ml-auto pb-1.5 text-[11px] text-cv-sub font-mono whitespace-nowrap">Captured #{person.person_id}</span>}
         </div>
 
         <div className="mt-3 min-h-[28px]">
