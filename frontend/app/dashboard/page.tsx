@@ -101,15 +101,15 @@ function VideoPreview({ file }: { file: File }) {
 }
 
 /* ── Settings ─────────────────────────────────────────────── */
+// Detection confidence (0.40) and nearness (0.30) are fixed constants in lib/api.ts, not user settings
 type Settings = {
-  confidence: number; glance_sec: number; engage_sec: number; strong_sec: number;
-  min_look_sec: number; near_ratio: number;
+  glance_sec: number; engage_sec: number; strong_sec: number; min_look_sec: number;
 };
 
 const PRESETS: { name: string; values: Settings }[] = [
-  { name: 'Lenient',  values: { confidence: 0.35, glance_sec: 1.5, engage_sec: 3, strong_sec: 6,  min_look_sec: 0.5, near_ratio: 0.25 } },
-  { name: 'Balanced', values: { confidence: 0.40, glance_sec: 2,   engage_sec: 5, strong_sec: 10, min_look_sec: 1,   near_ratio: 0.30 } },
-  { name: 'Strict',   values: { confidence: 0.50, glance_sec: 3,   engage_sec: 7, strong_sec: 15, min_look_sec: 1.5, near_ratio: 0.35 } },
+  { name: 'Lenient',  values: { glance_sec: 1.5, engage_sec: 3, strong_sec: 6,  min_look_sec: 0.5 } },
+  { name: 'Balanced', values: { glance_sec: 2,   engage_sec: 5, strong_sec: 10, min_look_sec: 1 } },
+  { name: 'Strict',   values: { glance_sec: 3,   engage_sec: 7, strong_sec: 15, min_look_sec: 1.5 } },
 ];
 const DEFAULT_SETTINGS = PRESETS.find(p => p.name === 'Balanced')!.values;
 const sameSettings = (a: Settings, b: Settings) =>
@@ -216,17 +216,6 @@ function SettingsPanel({ config, onChange, onPreset }: {
           hint="Attention at or above this is potential engagement" onChange={v => onChange('engage_sec', v)} />
         <SettingSlider label="Strongly engaged from" unit="s" min={2} max={60} step={1} value={config.strong_sec}
           hint="Attention at or above this is a stronger signal" onChange={v => onChange('strong_sec', v)} />
-      </div>
-
-      <div className="border-t border-cv-border pt-6 space-y-5">
-        <div>
-          <p className="font-semibold text-cv-text">Detection</p>
-          <p className="text-cv-sub text-sm mt-1">Which people in the frame are considered.</p>
-        </div>
-        <SettingSlider label="Nearness (person height / frame)" min={0.1} max={0.8} step={0.05} value={config.near_ratio}
-          hint="People smaller than this (far away) are ignored" onChange={v => onChange('near_ratio', v)} />
-        <SettingSlider label="Detection confidence" min={0.2} max={0.9} step={0.05} value={config.confidence}
-          hint="Minimum confidence for a person detection" onChange={v => onChange('confidence', v)} />
       </div>
 
     </div>

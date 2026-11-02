@@ -61,26 +61,28 @@ export interface AnalysisResult {
 }
 
 /* ── Upload and start analysis ────────────────────────────── */
+// Fixed detection settings (no longer user-adjustable)
+const DETECTION_CONFIDENCE = 0.40;   // minimum confidence for a person detection
+const NEARNESS_RATIO = 0.30;         // people shorter than this share of the frame (far away) are ignored
+
 export async function uploadVideo(
   file: File,
   config: {
-    confidence?: number;
     glance_sec?: number;
     engage_sec?: number;
     strong_sec?: number;
     min_look_sec?: number;
-    near_ratio?: number;
   }
 ): Promise<{ job_id: string }> {
   const form = new FormData();
   form.append('video', file);
   form.append('config', JSON.stringify({
-    confidence:   config.confidence   ?? 0.40,
+    confidence:   DETECTION_CONFIDENCE,
+    near_ratio:   NEARNESS_RATIO,
     glance_sec:   config.glance_sec   ?? 2,
     engage_sec:   config.engage_sec   ?? 5,
     strong_sec:   config.strong_sec   ?? 10,
     min_look_sec: config.min_look_sec ?? 1,
-    near_ratio:   config.near_ratio   ?? 0.30,
   }));
 
   const res = await fetch(`${BACKEND}/api/analyze`, {
