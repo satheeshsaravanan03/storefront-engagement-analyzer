@@ -301,12 +301,13 @@ export default function JobsPage() {
                           <span className="font-semibold text-cv-accent w-5 text-right">{finished ? j.engaged + j.strong : '—'}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                      <td className="px-3 py-2 text-right whitespace-nowrap cursor-default" onClick={e => e.stopPropagation()}>
+                        {/* padded buttons give a bigger target, so a click near the icon never opens the row's sidebar */}
                         <button onClick={e => { e.stopPropagation(); setSelected(j); }}
-                          className="text-cv-accent hover:text-cv-accentL text-sm font-semibold mr-3">View</button>
+                          className="text-cv-accent hover:text-cv-accentL hover:bg-cv-accent/10 active:scale-95 text-sm font-semibold px-3 py-2 rounded-lg transition-all align-middle">View</button>
                         <button onClick={e => { e.stopPropagation(); handleDelete(j); }}
                           disabled={busy === j.job_id || b === 'processing'}
-                          className="text-cv-sub hover:text-cv-red disabled:opacity-40 disabled:cursor-not-allowed transition-colors align-middle"
+                          className="ml-2 p-2.5 rounded-lg text-cv-sub hover:text-cv-red hover:bg-cv-red/10 active:scale-90 active:bg-cv-red/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cv-red/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:active:scale-100 transition-all align-middle"
                           title="Delete">
                           {busy === j.job_id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                         </button>
