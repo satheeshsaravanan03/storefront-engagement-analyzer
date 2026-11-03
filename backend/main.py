@@ -347,7 +347,8 @@ async def registry_photo(profile_id: str):
         if p["id"] == profile_id and p["photo"]:
             path = (faces.PHOTOS_DIR / p["photo"]).resolve()
             if faces.PHOTOS_DIR.resolve() in path.parents and path.is_file():
-                return FileResponse(str(path))
+                # a replaced photo must show up straight away: make the browser re-check each time
+                return FileResponse(str(path), headers={"Cache-Control": "no-cache"})
     raise HTTPException(404, detail="No photo")
 
 
