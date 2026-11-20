@@ -91,8 +91,11 @@ git checkout feature/attention-reid
 |---|---|---|---|
 | Lead photos | `backend/registry/photos/` | same path | personal data |
 | Backend settings | `backend/.env` | `backend/.env` | holds the SerpAPI key |
-| Jobs, videos, results (about 1.4 GB, 17 jobs) | `D:\tmp\crowdvision_output` | the folder `OUTPUT_DIR` points to | large, and data |
-| Cloudflare tunnel files | `C:\Users\<user>\.cloudflared\` (`cert.pem`, `exhibition.yml`, `<tunnel-id>.json`) | same folder on the new PC | credentials |
+| Jobs, videos, results (10 jobs, about 1 GB) | `D:\tmp\crowdvision_output` | `D:\Exhibition Video monitoring` on the new PC (the folder `OUTPUT_DIR` points to) | large, and data |
+
+The data travels as one zip, `exhibition-data.zip` (about 1.1 GB, shared through Google Drive). It holds two folders: `crowdvision_output/` (the 10 jobs) and `registry_photos/` (the 13 lead photos, P001 to P015). Unzip it, put the **job folders** (each one named like `7d96b834`, with `input.mp4`, `job.json` and `captures/` inside) directly under `D:\Exhibition Video monitoring`, and copy the **photos** into `backend/registry/photos/`. The zip contains real faces, so keep the Drive link private and delete the zip when done.
+
+The Cloudflare tunnel is **not** copied. It is created again on the new PC (section 6).
 
 Not needed: `backend/models/` (the two face models download on first start), the YOLO `.pt` weights (ultralytics downloads them), `node_modules`, and the `.next-demo` build (rebuild it).
 
@@ -113,7 +116,7 @@ Create `backend/.env` (or copy the old one) and fix the paths for the new machin
 PORT=8001
 BACKEND_URL=https://api-analysis.softsuaveai.space   # the address the browser uses to reach the backend
 PUBLIC_URL=https://api-analysis.softsuaveai.space    # public address; SerpAPI uses it to fetch snapshots
-OUTPUT_DIR=D:/tmp/crowdvision_output                 # where the jobs folder was copied
+OUTPUT_DIR=D:/Exhibition Video monitoring            # folder that directly contains the job folders (spaces are fine, no quotes needed)
 SERPAPI_KEY=<your key>
 ```
 
@@ -138,13 +141,22 @@ node node_modules\next\dist\bin\next start -p 3001
 
 PowerShell uses `$env:NEXT_DIST_DIR=".next-demo"` instead of `set`. The backend address is baked in at build time, so rebuild whenever it changes. After a build, run `git checkout frontend/tsconfig.json frontend/next-env.d.ts` because the build rewrites them.
 
-### 6. Public access (Cloudflare tunnel)
+### 6. Public access (Cloudflare tunnel, set up fresh on the new PC)
 
-`~/.cloudflared/exhibition.yml`:
+Do not copy the old tunnel files. Create a new tunnel and point the two hostnames at it (`--overwrite-dns` is needed because they still point at the old tunnel):
+
+```powershell
+cloudflared tunnel login
+cloudflared tunnel create exhibition
+cloudflared tunnel route dns --overwrite-dns exhibition analysis.softsuaveai.space
+cloudflared tunnel route dns --overwrite-dns exhibition api-analysis.softsuaveai.space
+```
+
+Create `%USERPROFILE%\.cloudflared\config.yml`, using the tunnel ID and credentials path printed by `create`:
 
 ```yaml
-tunnel: e82c748b-d566-48d0-9d43-b4063a01d268
-credentials-file: C:\Users\<user>\.cloudflared\e82c748b-d566-48d0-9d43-b4063a01d268.json
+tunnel: <new-tunnel-id>
+credentials-file: C:\Users\<user>\.cloudflared\<new-tunnel-id>.json
 ingress:
   - hostname: analysis.softsuaveai.space
     service: http://localhost:3001
@@ -153,7 +165,20 @@ ingress:
   - service: http_status:404
 ```
 
-Update the `credentials-file` path for the new user name, then run `cloudflared tunnel --config %USERPROFILE%\.cloudflared\exhibition.yml run exhibition`. **Stop the tunnel on the old PC first**, otherwise traffic is split between the two machines.
+Run it with `cloudflared tunnel run exhibition`. The public site only moves to the new PC once the DNS routes are overwritten. After it works, stop the tunnel on the old PC, otherwise traffic is split between the two.
+
+### URLs used by this project
+
+| Purpose | URL | Where it is set |
+|---|---|---|
+| Public website (frontend) | https://analysis.softsuaveai.space | Cloudflare ingress, port 3001 |
+| Public API (backend) | https://api-analysis.softsuaveai.space | Cloudflare ingress, port 8001; `BACKEND_URL` and `PUBLIC_URL` in `backend/.env`; `NEXT_PUBLIC_BACKEND_URL` when building the frontend |
+| Local website, live build | http://localhost:3001 | `next start -p 3001` |
+| Local API, live copy | http://localhost:8001 | `uvicorn --port 8001` |
+| Dev website / API | http://localhost:3000 / http://localhost:8000 | dev copy only |
+| Health check | http://localhost:8001/api/registry (should list 13 leads) | |
+
+To use a different domain, change the two hostnames in the tunnel config and the `route dns` commands, `BACKEND_URL` and `PUBLIC_URL` in `backend/.env`, and rebuild the frontend with the new `NEXT_PUBLIC_BACKEND_URL`.
 
 ### 7. Local development copy (optional, ports 3000 and 8000)
 
