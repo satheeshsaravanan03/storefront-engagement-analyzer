@@ -48,3 +48,6 @@ backend/yolov8m.pt
 backend/models/
 backend/registry/photos/*
 !backend/registry/photos/.gitkeep
+
+# Backup copies of replaced lead photos
+backend/registry/photos/*.bak

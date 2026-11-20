@@ -50,6 +50,86 @@
       "company": "Zenith Retail",
       "photo": "P005.jpg",
       "registered_at": "2026-10-30T10:38:00"
+    },
+    {
+      "id": "P006",
+      "name": "Daniel Whitmore",
+      "email": "daniel.whitmore@example.com",
+      "phone": "+1 555 010 0106",
+      "role": "Operations Manager",
+      "company": "Harborview Supply Co.",
+      "photo": "P006.jpg",
+      "registered_at": "2026-11-03T16:21:31"
+    },
+    {
+      "id": "P007",
+      "name": "Marcus Ellery",
+      "email": "marcus.ellery@example.com",
+      "phone": "+91 90000 10019",
+      "role": "Product Designer",
+      "company": "Northwind Labs",
+      "photo": "P007.jpg",
+      "registered_at": "2026-11-13T20:43:22"
+    },
+    {
+      "id": "P008",
+      "name": "Ethan Brooks",
+      "email": "ethan.brooks@example.com",
+      "phone": "+91 90000 10052",
+      "role": "Software Developer",
+      "company": "Pixelforge Studio",
+      "photo": "P008.jpg",
+      "registered_at": "2026-11-13T20:43:24"
+    },
+    {
+      "id": "P010",
+      "name": "Arjun Mehta",
+      "email": "arjun.mehta@example.com",
+      "phone": "+91 90000 10003",
+      "role": "Retail Analyst",
+      "company": "Urbanmart Group",
+      "photo": "P010.jpg",
+      "registered_at": "2026-11-13T20:43:28"
+    },
+    {
+      "id": "P011",
+      "name": "Natalia Petrova",
+      "email": "natalia.petrova@example.com",
+      "phone": "+91 90000 10004",
+      "role": "Brand Manager",
+      "company": "Silverline Retail",
+      "photo": "P011.jpg",
+      "registered_at": "2026-11-13T20:43:30"
+    },
+    {
+      "id": "P013",
+      "name": "Viktor Novak",
+      "email": "viktor.novak@example.com",
+      "phone": "+91 90000 10004",
+      "role": "Procurement Manager",
+      "company": "Eastgate Supplies",
+      "photo": "P013.jpg",
+      "registered_at": "2026-11-13T20:43:34"
+    },
+    {
+      "id": "P014",
+      "name": "Lars Henriksen",
+      "email": "lars.henriksen@example.com",
+      "phone": "+91 90000 10008",
+      "role": "Facilities Manager",
+      "company": "Nordic Build Co",
+      "photo": "P014.jpg",
+      "registered_at": "2026-11-13T20:43:37"
+    },
+    {
+      "id": "P015",
+      "name": "Tomas Keller",
+      "email": "tomas.keller@example.com",
+      "phone": "+91 90000 10024",
+      "role": "Sales Executive",
+      "company": "Keller & Sons",
+      "photo": "P015.jpg",
+      "registered_at": "2026-11-13T20:43:39"
     }
   ]
 }

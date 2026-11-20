@@ -49,6 +49,145 @@ No Python installation needed. No Jupyter notebook. Just a browser.
 
 ---
 
+## 🧑‍💼 Exhibition Monitoring: Attention Analysis & Face Matching
+
+This branch (`feature/attention-reid`) turns CrowdVision into an exhibition tool. Upload a video of a stand and it reports **who looked at it, for how long, and who they are** (if they registered).
+
+- **Attention analysis**: YOLOv8-pose finds each visitor and their head direction, ByteTrack follows them, and the app measures how long each person looks at the stand. Viewers are labelled glance / engaged / strong.
+- **Face matching (consent-based)**: a sharp snapshot of each engaged viewer is compared with the photos of registered leads (YuNet finds the face, SFace turns it into a 128-number embedding, cosine similarity decides). Results: `matched`, `possible` (needs a human check), `unmatched`, `no_face`.
+- **Leads page**: add a lead with name, contact and photo. **Jobs page**: every analysed video and its viewers, with the matched lead beside each snapshot.
+- Explainers: [docs/face-detection-and-matching.md](docs/face-detection-and-matching.md) (how it works), [docs/demo-video-requirements.md](docs/demo-video-requirements.md) (what demo footage to use), [docs/ui-theme-options-v2.html](docs/ui-theme-options-v2.html) (theme options, open in a browser).
+
+### Fixed settings
+
+| Setting | Value | Where |
+|---|---|---|
+| Detection confidence | 0.40 | `DETECTION_CONFIDENCE` in `frontend/lib/api.ts` |
+| Nearness ratio | 0.30 | `NEARNESS_RATIO` in `frontend/lib/api.ts` |
+| Face match / possible / margin | 0.45 / 0.363 / 0.05 | `backend/faces.py` |
+| Smallest usable face | 28 px (60 px or more works well) | `backend/faces.py` |
+
+---
+
+## 🖥️ Setup on a New Machine (Windows)
+
+### 1. Install
+
+- Git, Python 3.12, Node.js 20 or newer (24 is in use), and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) if the site must be public.
+
+### 2. Get the code
+
+```bash
+git clone <repo-url> Exhibition-monitoring
+cd Exhibition-monitoring
+git checkout feature/attention-reid
+```
+
+`feature/face-match` is the dev copy of the same work; `feature/attention-reid` is what runs live.
+
+### 3. Things that are NOT in git (copy them from the old PC)
+
+| What | Old location | Put it at | Why it isn't in git |
+|---|---|---|---|
+| Lead photos | `backend/registry/photos/` | same path | personal data |
+| Backend settings | `backend/.env` | `backend/.env` | holds the SerpAPI key |
+| Jobs, videos, results (about 1.4 GB, 17 jobs) | `D:\tmp\crowdvision_output` | the folder `OUTPUT_DIR` points to | large, and data |
+| Cloudflare tunnel files | `C:\Users\<user>\.cloudflared\` (`cert.pem`, `exhibition.yml`, `<tunnel-id>.json`) | same folder on the new PC | credentials |
+
+Not needed: `backend/models/` (the two face models download on first start), the YOLO `.pt` weights (ultralytics downloads them), `node_modules`, and the `.next-demo` build (rebuild it).
+
+The lead list itself (`backend/registry/profiles.json`) **is** in git. Photos are matched to it by file name (`P001.jpg` and so on), so copy the photos exactly as they are.
+
+### 4. Backend
+
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Create `backend/.env` (or copy the old one) and fix the paths for the new machine:
+
+```env
+PORT=8001
+BACKEND_URL=https://api-analysis.softsuaveai.space   # the address the browser uses to reach the backend
+PUBLIC_URL=https://api-analysis.softsuaveai.space    # public address; SerpAPI uses it to fetch snapshots
+OUTPUT_DIR=D:/tmp/crowdvision_output                 # where the jobs folder was copied
+SERPAPI_KEY=<your key>
+```
+
+Start it (no `--reload` for the live copy):
+
+```bash
+python -m uvicorn main:app --host 0.0.0.0 --port 8001
+```
+
+First start downloads about 40 MB of face models and the YOLO weights, so it needs internet. Jobs are read from `OUTPUT_DIR` only at startup, so restart the backend after copying jobs in. Check it at http://localhost:8001/api/registry (should list 13 leads).
+
+### 5. Frontend: live build (port 3001)
+
+```bash
+cd frontend
+npm install
+set NEXT_DIST_DIR=.next-demo
+set NEXT_PUBLIC_BACKEND_URL=https://api-analysis.softsuaveai.space
+npx next build
+node node_modules\next\dist\bin\next start -p 3001
+```
+
+PowerShell uses `$env:NEXT_DIST_DIR=".next-demo"` instead of `set`. The backend address is baked in at build time, so rebuild whenever it changes. After a build, run `git checkout frontend/tsconfig.json frontend/next-env.d.ts` because the build rewrites them.
+
+### 6. Public access (Cloudflare tunnel)
+
+`~/.cloudflared/exhibition.yml`:
+
+```yaml
+tunnel: e82c748b-d566-48d0-9d43-b4063a01d268
+credentials-file: C:\Users\<user>\.cloudflared\e82c748b-d566-48d0-9d43-b4063a01d268.json
+ingress:
+  - hostname: analysis.softsuaveai.space
+    service: http://localhost:3001
+  - hostname: api-analysis.softsuaveai.space
+    service: http://localhost:8001
+  - service: http_status:404
+```
+
+Update the `credentials-file` path for the new user name, then run `cloudflared tunnel --config %USERPROFILE%\.cloudflared\exhibition.yml run exhibition`. **Stop the tunnel on the old PC first**, otherwise traffic is split between the two machines.
+
+### 7. Local development copy (optional, ports 3000 and 8000)
+
+Use a separate folder or git worktree so it never touches live data:
+
+```bash
+git worktree add ../Exhibition-monitoring-facematch feature/face-match
+```
+
+In that copy, set `OUTPUT_DIR=D:/tmp/crowdvision_dev` and `PORT=8000` in `backend/.env`, copy the lead photos, then run `python -m uvicorn main:app --port 8000 --reload` in `backend` and `npm run dev` in `frontend`.
+
+### Ports at a glance
+
+| | Frontend | Backend | Data folder |
+|---|---|---|---|
+| Live | 3001 (`next start`) | 8001 | `OUTPUT_DIR` in `backend/.env` |
+| Dev | 3000 (`next dev`) | 8000 (`--reload`) | `D:/tmp/crowdvision_dev` |
+
+### Known limits and troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Upload fails with "Failed to fetch" on the public site | Cloudflare rejects request bodies over about 100 MB. Compress the video below 100 MB, or upload on the local copy. |
+| A replaced lead photo still shows the old one | Browser cache. Hard refresh with Ctrl+Shift+R once. |
+| New or copied jobs don't appear | The backend reads jobs only at startup. Restart it. |
+| Site stops after a restart or sign-out | Servers and the tunnel are started by hand. Start them again, or set them up as startup tasks. |
+| Everything works but the site is unreachable from outside | The tunnel isn't running, or the old PC is still running it. |
+| No login | Anyone with the URL can see leads' names and contacts. Add staff login before using real data. |
+| Lead details are placeholders | Edit `backend/registry/profiles.json` or add leads on the Leads page. |
+
+Never commit `backend/.env` or `backend/registry/photos/*`. Both are in `.gitignore`.
+
+---
+
 ## 🎓 Academic Context
 
 | Field | Details |
