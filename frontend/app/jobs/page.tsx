@@ -8,7 +8,9 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { listJobs, deleteJob, getJobStatus, type JobSummary, type AnalysisResult } from '@/lib/api';
-import { EngagementResults } from '@/components/EngagementResults';
+import { EngagementResults, UploadedVideo } from '@/components/EngagementResults';
+import { PlaceResults } from '@/components/PlaceResults';
+import { AnnotatedVideo } from '@/components/AnnotatedVideo';
 import { AppShell } from '@/components/AppShell';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -24,16 +26,17 @@ const PILL: Record<Filter, { label: string; cls: string; dot: string }> = {
 const bucket = (j: JobSummary): Filter => (j.status === 'queued' ? 'processing' : j.status);
 
 /* ── Side drawer: viewers of one job ──────────────────────── */
-function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
+function JobDrawer({ job, onClose, onChanged }: { job: JobSummary; onClose: () => void; onChanged: () => void }) {
   const [detail, setDetail] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setDetail(null); setError(null);
+  const load = useCallback(() => {
     getJobStatus(job.job_id)
       .then(setDetail)
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load job'));
   }, [job.job_id]);
+
+  useEffect(() => { setDetail(null); setError(null); load(); }, [load]);
 
   // Freeze the page behind the drawer, and close on Escape
   const closeRef = useRef(onClose);
@@ -44,7 +47,7 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
     const scrollbar = window.innerWidth - html.clientWidth;
     body.style.overflow = 'hidden';
     if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`; // avoid a layout jump
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) closeRef.current(); };
     window.addEventListener('keydown', onKey);
     return () => {
       body.style.overflow = prev.overflow;
@@ -87,7 +90,7 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
 
         <div className="p-6 space-y-4">
           {!detail && !error && (
-            <div className="flex items-center gap-2 text-cv-sub text-sm"><Loader2 size={14} className="animate-spin" /> Loading viewers...</div>
+            <div className="flex items-center gap-2 text-cv-sub text-sm"><Loader2 size={14} className="animate-spin" /> {job.mode === 'places' ? 'Loading results...' : 'Loading viewers...'}</div>
           )}
           {error && <p className="text-cv-red text-sm font-mono">{error}</p>}
           {detail?.status === 'error' && (
@@ -96,7 +99,19 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
               <p className="text-cv-sub text-xs font-mono whitespace-pre-wrap">{detail.error}</p>
             </div>
           )}
-          {detail?.status === 'done' && (
+          {detail?.status === 'done' && (detail.mode === 'places' && detail.places_result ? (
+            <>
+              <div className="glow-border bg-cv-card rounded-2xl p-4 flex items-center gap-6 flex-wrap text-sm text-cv-sub">
+                <span className="text-xs font-mono">SETTINGS USED</span>
+                <span>Entered after <span className="font-mono text-cv-text">{detail.stats?.stay_sec ?? 2.5} s</span></span>
+                <span>Stopped after <span className="font-mono text-cv-text">{detail.stats?.stop_sec ?? 3} s</span></span>
+              </div>
+              <AnnotatedVideo result={detail} />
+              <PlaceResults result={detail.places_result} stats={detail.stats} eventsUrl={detail.events_url}
+                jobId={job.job_id} canAdjust={detail.can_adjust} onChanged={updated => { setDetail(updated); onChanged(); }} />
+              <UploadedVideo jobId={job.job_id} filename={job.filename} />
+            </>
+          ) : (
             <>
               <div className="glow-border bg-cv-card rounded-2xl p-4 flex items-center gap-6 flex-wrap text-sm text-cv-sub">
                 <span className="text-xs font-mono">THRESHOLDS USED</span>
@@ -104,6 +119,7 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
                 <span>Engaged from <span className="font-mono text-cv-text">{thr.engage} s</span></span>
                 <span>Strong from <span className="font-mono text-cv-text">{thr.strong} s</span></span>
               </div>
+              <AnnotatedVideo result={detail} />
               <EngagementResults
                 viewers={detail.viewers ?? []}
                 glanceSec={thr.glance} engageSec={thr.engage} strongSec={thr.strong}
@@ -116,7 +132,7 @@ function JobDrawer({ job, onClose }: { job: JobSummary; onClose: () => void }) {
                 filename={job.filename}
               />
             </>
-          )}
+          ))}
         </div>
       </motion.aside>
     </>
@@ -162,8 +178,9 @@ export default function JobsPage() {
 
   const all = jobs ?? [];
   const done = all.filter(j => j.status === 'done');
-  const viewers = done.reduce((n, j) => n + j.viewers, 0);
-  const engaged = done.reduce((n, j) => n + j.engaged + j.strong, 0);
+  const standDone = done.filter(j => j.mode !== 'places');   // mall places jobs have no viewers to add up
+  const viewers = standDone.reduce((n, j) => n + j.viewers, 0);
+  const engaged = standDone.reduce((n, j) => n + j.engaged + j.strong, 0);
   const rate = viewers ? Math.round((engaged / viewers) * 100) : 0;
   const count = (f: Filter) => (f === 'all' ? all.length : all.filter(j => bucket(j) === f).length);
 
@@ -257,6 +274,7 @@ export default function JobsPage() {
                 {rows.map(j => {
                   const b = bucket(j);
                   const finished = j.status === 'done';
+                  const mall = j.mode === 'places';
                   const pct = finished && j.viewers ? Math.round(((j.engaged + j.strong) / j.viewers) * 100) : 0;
                   const d = new Date(j.created_at * 1000);
                   return (
@@ -270,7 +288,10 @@ export default function JobsPage() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-medium truncate max-w-[230px]">{j.filename}</p>
-                            <p className="text-cv-sub text-xs font-mono">{j.job_id}</p>
+                            <p className="text-cv-sub text-xs font-mono">
+                              {j.job_id}
+                              {mall && <span className="ml-2 text-cv-accent">Mall places{finished && j.entered != null ? ` · ${j.entered} entered` : ''}</span>}
+                            </p>
                           </div>
                         </div>
                       </td>
@@ -292,13 +313,13 @@ export default function JobsPage() {
                         )}
                       </td>
                       <td className="px-3 py-3.5 text-right">{j.duration_sec != null ? `${j.duration_sec.toFixed(0)}s` : '—'}</td>
-                      <td className="px-3 py-3.5 text-right">{finished ? j.viewers : '—'}</td>
+                      <td className="px-3 py-3.5 text-right">{finished && !mall ? j.viewers : '—'}</td>
                       <td className="px-3 py-3.5">
                         <div className="flex items-center justify-end gap-3">
                           <div className="h-1.5 w-16 bg-cv-border rounded-full overflow-hidden">
                             <div className="h-full bg-cv-accent" style={{ width: `${pct}%` }} />
                           </div>
-                          <span className="font-semibold text-cv-accent w-5 text-right">{finished ? j.engaged + j.strong : '—'}</span>
+                          <span className="font-semibold text-cv-accent w-5 text-right">{finished && !mall ? j.engaged + j.strong : '—'}</span>
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap cursor-default" onClick={e => e.stopPropagation()}>
@@ -327,7 +348,7 @@ export default function JobsPage() {
       </div>
 
       <AnimatePresence>
-        {selected && <JobDrawer key={selected.job_id} job={selected} onClose={() => setSelected(null)} />}
+        {selected && <JobDrawer key={selected.job_id} job={selected} onClose={() => setSelected(null)} onChanged={refresh} />}
       </AnimatePresence>
     </AppShell>
   );

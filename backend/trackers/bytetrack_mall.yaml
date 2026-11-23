@@ -1,0 +1,11 @@
+# ByteTrack for a fixed mall camera (mall places mode). Same keys as ultralytics' bytetrack.yaml.
+# People are small and often hidden by others, so a lost track is kept alive longer before its ID
+# is given up. Frames are counted in analysed frames (about 12 a second), so 60 is about 5 seconds.
+
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True

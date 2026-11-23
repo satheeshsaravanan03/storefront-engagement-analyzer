@@ -11,15 +11,22 @@ viewer is given a behaviour label from how long they looked.
 
 Runs as a background job and reports live progress through the JobStore
 shared with the FastAPI main process.
+
+A second mode, mall places (process_places_job at the end of this file), is for a fixed
+camera that sees several shops: the shops are marked by the user and each person's feet
+are tested against them (see places.py) to count who entered, left or stopped at each one.
 """
 
 import base64
 import csv
 import json
+import math
+import os
 import threading
 import time
 import traceback
-from collections import deque
+from bisect import bisect_right
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
@@ -27,6 +34,9 @@ from typing import Dict, Optional
 import cv2
 import numpy as np
 
+import identity as identity_mod
+import journeys as journeys_mod
+import places as places_mod
 import reid as reid_mod
 from storage import get_storage
 
@@ -287,6 +297,17 @@ class AttentionTracker:
         return p["dist"] / p["dist_t"] if p["dist_t"] > 0 else 0.0
 
 
+# ── Video output ──────────────────────────────────────────────
+def open_writer(path: str, fps: float, size: tuple) -> "cv2.VideoWriter":
+    """Prefer browser-playable H.264, fall back to mp4v."""
+    for codec in ("avc1", "mp4v"):
+        w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), fps, size)
+        if w.isOpened():
+            return w
+        w.release()
+    raise RuntimeError("Could not open a video writer")
+
+
 # ── Main processing function ──────────────────────────────────
 def process_video_job(
     job_id: str,
@@ -367,17 +388,9 @@ def process_video_job(
             "source_fps": FPS,
         })
 
-        # ── Video writer (prefer browser-playable H.264) ─────
+        # ── Video writer ─────────────────────────────────────
         out_path = str(Path(job_dir) / "annotated.mp4")
-        writer = None
-        for codec in ("avc1", "mp4v"):
-            w = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*codec), FPS, (W, H))
-            if w.isOpened():
-                writer = w
-                break
-            w.release()
-        if writer is None:
-            raise RuntimeError("Could not open a video writer")
+        writer = open_writer(out_path, FPS, (W, H))
 
         fps_buf = deque(maxlen=30)
         fid = 0
@@ -610,6 +623,388 @@ def process_video_job(
             },
             "viewers": viewers,
         })
+
+    except Exception as e:
+        jobs.update(job_id, {
+            "status": "error",
+            "error":  f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()[-800:]}",
+        })
+
+
+# ── Mall places mode ──────────────────────────────────────────
+# A model file is a pickle, so only names from this list are ever loaded, never one the client sent
+MALL_MODELS = ("yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt")
+MALL_TRACKER = str(Path(__file__).with_name("trackers") / "bytetrack_mall.yaml")
+STAY_SEC = (2.5, 0.5, 30.0)    # default, lowest, highest: inside this long counts as entered
+STOP_SEC = (3.0, 0.5, 120.0)   # the same for standing still in front this long counting as stopped
+MALL_VIDEO_WIDTH = 1280   # the annotated video is scaled down to this width
+BADGE_SEC = 2.0           # how long an event badge stays on the annotated video
+
+EVENT_COLORS = {"enter": (0, 200, 0), "exit": (0, 140, 255), "peek": (170, 170, 170), "stop": (0, 215, 255)}
+EVENT_FIELDS = ["person_id", "track_id", "event", "place", "time_s", "frame", "duration_s",
+                "confidence", "feet_estimated", "reason"]
+
+
+def read_setting(config: dict, key: str, default: float, lo: float, hi: float) -> float:
+    """A number from the client's config, held inside [lo, hi] so a bad value cannot stall or crash the job."""
+    v = float(config.get(key, default))
+    if not math.isfinite(v):
+        raise ValueError(f"{key} must be a number")
+    return min(max(v, lo), hi)
+
+
+def csv_safe(text: str) -> str:
+    """A shop name is typed by the user: one that starts like a spreadsheet formula is made plain text."""
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def draw_pill(frame: np.ndarray, text: str, x: float, y: float, bg: tuple, scale: float = 0.4, alpha: float = 0.75):
+    """A small label on a tinted box, moved if needed so it stays inside the frame."""
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+    w, h = tw + 8, th + base + 6
+    x, y = int(min(max(x, 0), frame.shape[1] - w)), int(min(max(y, 0), frame.shape[0] - h))
+    roi = frame[y:y + h, x:x + w]
+    cv2.addWeighted(np.full_like(roi, bg), alpha, roi, 1.0 - alpha, 0, roi)
+    cv2.putText(frame, text, (x + 4, y + h - base - 2), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def preview_jpeg(frame: np.ndarray, boxes: list, width: int = 640) -> str:
+    """
+    The live preview: the frame scaled to `width` with the tracked people on it, as base64 JPEG. The shops are not
+    drawn here: the page draws them over the picture, the same way it does over the finished video.
+    """
+    sc = width / frame.shape[1]
+    small = cv2.resize(frame, (width, max(1, int(frame.shape[0] * sc))))
+    draw_people(small, boxes, sc, lambda t: f"#{t}")
+    _, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return base64.b64encode(jpg.tobytes()).decode()
+
+
+def draw_people(frame: np.ndarray, boxes: list, sc: float, name):
+    """Tracked people: a thin light box and a small ID label. name(track id) is the label's text."""
+    for tid, x1, y1, x2, y2 in boxes:
+        p1, p2 = (int(x1 * sc), int(y1 * sc)), (int(x2 * sc), int(y2 * sc))
+        cv2.rectangle(frame, p1, p2, (225, 225, 225), 1, cv2.LINE_AA)
+        draw_pill(frame, name(tid), p1[0], p1[1] - 16, (40, 40, 40), 0.35, 0.65)
+
+
+def render_places_video(video_path: str, out_path: str, shops: list, seen: Dict[int, list], feet: Dict[int, list],
+                        events: list, name, name_of, fps: float, stride: int, on_progress=None):
+    """
+    Second pass over the video for the annotated output: tracked people, their feet (yellow when estimated from
+    the head) and a badge at the door for every event. The shops are not drawn here: the page draws them over the
+    video, where they can be switched off. It plays at normal speed on the analysed frames.
+    seen: {fid: [(track_id, x1, y1, x2, y2)]}    feet: {track_id: [(fid, x, feet_row, estimated, body_h)]}
+    name(track id) and name_of(person id) are the texts of a person's label and of an event badge.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    sc = min(1.0, MALL_VIDEO_WIDTH / W)
+    size = (int(W * sc) // 2 * 2, int(H * sc) // 2 * 2)   # H.264 needs even sizes
+    writer = open_writer(out_path, fps / stride, size)
+
+    feet_at = defaultdict(list)
+    for pts in feet.values():
+        for fid, x, y, estimated, _ in pts:
+            feet_at[fid].append((x, y, estimated))
+    # event badges go on the outside of the door
+    badge_at = {}
+    for s in shops:
+        mid = ((s["a"][0] + s["b"][0]) / 2 * sc, (s["a"][1] + s["b"][1]) / 2 * sc)
+        badge_at[s["name"]] = (mid[0] - s["inward"][0] * 0.05 * max(size), mid[1] - s["inward"][1] * 0.05 * max(size))
+    counted = {k: sorted(e["frame"] for e in events if e["event"] == k) for k in ("enter", "exit")}
+    badge_frames = int(BADGE_SEC * fps)
+
+    fid = 0
+    while cap.grab():
+        if fid % stride == 0:
+            ok, frame = cap.retrieve()
+            if not ok:
+                break
+            if frame.shape[1] != size[0] or frame.shape[0] != size[1]:
+                frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+            draw_people(frame, seen.get(fid, []), sc, name)
+            for x, y, estimated in feet_at.get(fid, []):
+                cv2.circle(frame, (int(x * sc), int(y * sc)), 4, (30, 30, 30), -1, cv2.LINE_AA)
+                cv2.circle(frame, (int(x * sc), int(y * sc)), 3, (0, 230, 255) if estimated else (255, 255, 255), -1, cv2.LINE_AA)
+
+            stacked = defaultdict(int)
+            for e in events:
+                if 0 <= fid - e["frame"] < badge_frames:
+                    x, y = badge_at[e["place"]]
+                    n = stacked[e["place"]]
+                    stacked[e["place"]] += 1
+                    draw_pill(frame, f"{name_of(e['person_id'])} {e['event'].upper()}", x - 30, y + 20 * n, EVENT_COLORS[e["event"]], 0.42, 0.85)
+
+            draw_pill(frame, f"t {fid / fps:.1f}s   in view {len(seen.get(fid, []))}   "
+                             f"entered {bisect_right(counted['enter'], fid)}   exited {bisect_right(counted['exit'], fid)}",
+                      8, 8, (30, 30, 30), 0.45, 0.6)
+            writer.write(frame)
+            if on_progress and total and fid % (stride * 10) == 0:
+                on_progress(fid / total)
+        fid += 1
+    cap.release()
+    writer.release()
+
+
+def replace_file(src: Path, dst: Path, tries: int = 10, wait: float = 0.5):
+    """os.replace that waits a little while the destination is open elsewhere (Windows refuses until it is closed)."""
+    for attempt in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise PermissionError(f"{dst.name} is open in another program (is the video playing?). Close it and try again.")
+            time.sleep(wait)
+
+
+def save_tracks(job_dir: str, data: dict):
+    """Keep the tracked people (tracks.json) so the marks can be adjusted later without detecting everyone again."""
+    (Path(job_dir) / "tracks.json").write_text(json.dumps({
+        **data,
+        "tracks": {str(t): [[o[0], *(round(v, 1) for v in o[1:])] for o in obs] for t, obs in data["tracks"].items()},
+        "person_of": {str(t): p for t, p in data.get("person_of", {}).items()},
+        "signatures": {str(t): rows for t, rows in data.get("signatures", {}).items()},
+    }), encoding="utf-8")
+
+
+def load_tracks(job_dir: str) -> dict:
+    """The tracked people saved by a mall places job (tracks.json), with track ids and boxes as the analysis wants them."""
+    raw = json.loads((Path(job_dir) / "tracks.json").read_text(encoding="utf-8"))
+    raw["tracks"] = {int(t): [tuple(o) for o in obs] for t, obs in raw["tracks"].items()}
+    raw["person_of"] = {int(t): p for t, p in raw.get("person_of", {}).items()}   # jobs from before visitor ids carry these
+    raw["signatures"] = {int(t): rows for t, rows in raw.get("signatures", {}).items()}
+    return raw
+
+
+def analyze_places_job(job_id: str, video_path: str, job_dir: str, shops: list, data: dict, stay_sec: float,
+                       stop_sec: float, memory_sec: float, settings: dict, stats: dict, jobs: JobStore):
+    """
+    Everything after the people are tracked: who is who, shop events and metrics, the result files and the
+    annotated video. It runs when tracking finishes and again, on the saved tracks, when the user adjusts the marks.
+    data: width, height, fps, stride, last_fid, tracks, signatures (see load_tracks; person_of only on jobs from
+    before visitor ids). memory_sec: how long a lost person is waited for. settings: what the result files record
+    about the run. stats: the job's stats, to which the new numbers are added.
+    """
+    W, H, FPS, stride = data["width"], data["height"], data["fps"], data["stride"]
+    jobs.update(job_id, {"phase": "matching people", "progress": 90, "preview_frame": None})
+    who = None
+    if settings.get("reid", True) and data["signatures"]:
+        who = identity_mod.resolve(data, places_mod.to_pixels(shops, W, H), memory_sec)
+        tracks, person_of, origin = who["pieces"], who["person_of"], who["origin"]
+    else:
+        tracks, person_of, origin = data["tracks"], data["person_of"], {}
+    jobs.update(job_id, {"phase": "finding shop events"})
+    res = places_mod.analyze(tracks, person_of, shops, W, H, FPS, data["last_fid"], stay_sec, stop_sec)
+    for e in res["events"]:
+        if e["track_id"] is not None:
+            e["track_id"] = origin.get(e["track_id"], e["track_id"])   # the tracker's id, not the id of a cut piece
+    metrics = journeys_mod.summarize(res["events"], res["front"], shops)
+    visitors = who["visitors"] if who else []
+    people = len({person_of.get(t, t) for t in res["feet"]})
+
+    # The files are written under temporary names and only replace the real ones once all of them worked, so a
+    # failure (or a download while this runs) never sees half of a new result
+    out_dir = Path(job_dir)
+    tmp = {name: out_dir / f"tmp_{name}" for name in ("place_events.csv", "place_metrics.json", "identity.json", "annotated.mp4")}
+    try:
+        # utf-8 with a BOM so Excel reads shop names in any script; a name that starts like a formula is made plain text
+        with open(tmp["place_events.csv"], "w", newline="", encoding="utf-8-sig") as f:
+            wr = csv.DictWriter(f, fieldnames=EVENT_FIELDS)
+            wr.writeheader()
+            wr.writerows({**e, "place": csv_safe(e["place"])} for e in res["events"])
+        tmp["place_metrics.json"].write_text(json.dumps({
+            "places": shops, "metrics": metrics, "front": res["front"], "height_model": res["height_model"],
+            "settings": {**settings, "stay_sec": stay_sec, "stop_sec": stop_sec, "memory_sec": memory_sec},
+        }, indent=2), encoding="utf-8")
+        # Audit trail of every cut and every join: what each was based on
+        tmp["identity.json"].write_text(json.dumps({
+            "enabled": who is not None, "memory_sec": memory_sec, "tracks": len(data["tracks"]),
+            "pieces": len(tracks), "visitors": len(visitors), "cuts": who["cuts"] if who else [],
+            "links": who["links"] if who else [],
+        }, indent=2), encoding="utf-8")
+
+        jobs.update(job_id, {"phase": "rendering video"})
+        seen: Dict[int, list] = {}   # only people: a mannequin the detector found is not drawn
+        for tid in res["feet"]:
+            for fid, x1, y1, x2, y2 in tracks[tid]:
+                seen.setdefault(fid, []).append((tid, x1, y1, x2, y2))
+        name_of = identity_mod.label if who else (lambda p: f"#{p}")
+        render_places_video(
+            video_path, str(tmp["annotated.mp4"]), places_mod.to_pixels(shops, W, H), seen, res["feet"],
+            res["events"], (lambda t: name_of(person_of.get(t, t))), name_of, FPS, stride,
+            on_progress=lambda frac: jobs.update(job_id, {"progress": 90 + int(min(frac, 1.0) * 9)}),
+        )
+        # The video goes first: a browser playing or downloading it keeps it open, and Windows will not replace an
+        # open file. If that happens nothing has changed yet and the old result stands whole.
+        for name in ("annotated.mp4", "place_events.csv", "place_metrics.json", "identity.json"):
+            replace_file(tmp[name], out_dir / name)
+    except Exception:
+        for path in tmp.values():
+            path.unlink(missing_ok=True)
+        raise
+    (out_dir / "results.zip").unlink(missing_ok=True)   # a bundle built from the old result must not be served
+
+    jobs.update(job_id, {
+        "status":   "done",
+        "phase":    "",
+        "progress": 100,
+        "stats": {
+            **stats,
+            "people":         people,
+            "entered":        metrics["overlap_entered"]["people"],
+            "stay_sec":       stay_sec,
+            "stop_sec":       stop_sec,
+            "memory_sec":     memory_sec,
+            "estimated_feet": res["estimated_share"],
+        },
+        "places_result": {
+            "places":       shops,
+            "events":       res["events"],
+            "metrics":      metrics,
+            "front":        res["front"],
+            "height_model": res["height_model"],
+            "visitors":     visitors,
+        },
+    })
+
+
+def process_places_job(
+    job_id: str,
+    video_path: str,
+    job_dir: str,
+    config: dict,
+    jobs: JobStore,
+):
+    """
+    Mall places mode: read -> detect + track -> match returning people -> shop events from the feet
+    -> metrics -> annotated video. The shops are marked by the user and checked in places.parse_places.
+    Called in a thread pool executor from the async FastAPI handler, like process_video_job.
+    """
+    try:
+        from ultralytics import YOLO
+        import torch
+
+        # ── Config ──────────────────────────────────────────
+        shops = places_mod.parse_places(config.get("places"))
+        model_name   = str(config.get("model", "yolov8m.pt"))
+        if model_name not in MALL_MODELS:
+            raise ValueError(f"Unknown model: {model_name}")
+        confidence   = read_setting(config, "confidence", 0.35, 0.05, 0.95)  # people are small: a lower bar than the stand mode
+        iou          = read_setting(config, "iou", 0.6, 0.3, 0.9)            # crowds: do not suppress people standing close together
+        imgsz        = int(read_setting(config, "imgsz", 1280, 320, 1920))
+        analysis_fps = read_setting(config, "analysis_fps", 12, 2, 30)       # frames analysed per second of video
+        stay_sec     = read_setting(config, "stay_sec", *STAY_SEC)           # inside this long counts as entered
+        stop_sec     = read_setting(config, "stop_sec", *STOP_SEC)           # standing still in front this long counts as stopped
+        memory_sec   = read_setting(config, "memory_sec", *identity_mod.MEMORY_SEC)   # a lost person is waited for this long
+        use_reid     = bool(config.get("reid", True))                        # keep one visitor id on a person for the whole video
+        reid_every   = int(read_setting(config, "reid_every", 3, 1, 30))     # take a colour sample of a person every N analysed frames
+        device = "0" if torch.cuda.is_available() else "cpu"
+
+        # ── Load model ───────────────────────────────────────
+        jobs.update(job_id, {"status": "processing", "phase": "loading model"})
+        model = YOLO(model_name)
+        _ = model(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, device=device)
+
+        # ── Open video ───────────────────────────────────────
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open video: {video_path}")
+
+        W     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        H     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        FPS   = float(cap.get(cv2.CAP_PROP_FPS)) or 25.0
+        TOTAL = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        stride = max(1, round(FPS / analysis_fps))
+
+        shops_px = places_mod.to_pixels(shops, W, H)
+        sampler = identity_mod.Sampler(reid_every, stride)
+        jobs.update(job_id, {
+            "phase": "tracking people",
+            "total_frames": TOTAL,
+            "resolution": f"{W}x{H}",
+            "source_fps": FPS,
+        })
+
+        tracks: Dict[int, list] = {}   # track id -> [(fid, x1, y1, x2, y2)]
+        fps_buf = deque(maxlen=30)
+        preview_every = max(1, (TOTAL // stride) // 100) if TOTAL > 0 else 5
+        fid = k = 0
+
+        # ── Frame loop (every `stride`-th frame) ─────────────
+        while cap.grab():
+            if fid % stride:
+                fid += 1
+                continue
+            ok, frame = cap.retrieve()
+            if not ok:
+                break
+            t0 = time.time()
+
+            try:
+                results = model.track(
+                    frame, persist=True, classes=[0],
+                    conf=confidence, iou=iou, imgsz=imgsz,
+                    tracker=MALL_TRACKER,
+                    verbose=False, device=device,
+                )
+            except Exception:
+                fid += 1
+                continue
+
+            boxes = []
+            r = results[0]
+            if r.boxes is not None and r.boxes.id is not None:
+                for box, tid in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.id.cpu().numpy().astype(int)):
+                    x1, y1, x2, y2 = (float(v) for v in box)
+                    boxes.append((int(tid), x1, y1, x2, y2))
+                    tracks.setdefault(int(tid), []).append((fid, x1, y1, x2, y2))
+
+            # Shirt and trousers colours for telling people apart later (the frame is still clean here)
+            if use_reid:
+                for tid, x1, y1, x2, y2 in boxes:
+                    sampler.offer(tid, fid, frame, (x1, y1, x2, y2), [b[1:] for b in boxes if b[0] != tid])
+
+            fps_buf.append(1.0 / max(time.time() - t0, 1e-6))
+
+            if k % preview_every == 0:
+                jobs.update(job_id, {
+                    "progress":         min(89, int(fid / TOTAL * 90)) if TOTAL > 0 else 0,   # the frame count can be wrong
+                    "processed_frames": fid,
+                    "fps":              round(float(np.mean(fps_buf)), 1),
+                    "preview_frame":    preview_jpeg(frame, boxes),
+                    "frame_data": {
+                        "time_sec":   round(fid / FPS, 1),
+                        "people_now": len(boxes),
+                        "tracks":     len(tracks),
+                        "fps":        round(float(np.mean(fps_buf)), 1),
+                    },
+                })
+
+            fid += 1
+            k += 1
+
+        cap.release()
+
+        save_tracks(job_dir, {"width": W, "height": H, "fps": FPS, "stride": stride, "last_fid": fid - 1,
+                              "tracks": tracks, "signatures": sampler.samples})
+        data = load_tracks(job_dir)   # boxes are saved to a tenth of a pixel: the first analysis uses the saved ones too
+
+        jobs.update(job_id, {"processed_frames": fid})
+        analyze_places_job(
+            job_id, video_path, job_dir, shops, data, stay_sec, stop_sec, memory_sec,
+            {"model": model_name, "imgsz": imgsz, "analysis_fps": round(FPS / stride, 1),
+             "confidence": confidence, "reid": use_reid},
+            {"duration_sec": round(fid / max(FPS, 1), 1), "resolution": f"{W}x{H}", "source_fps": round(FPS, 1),
+             "total_frames": fid, "tracks": len(tracks), "model": model_name,
+             "analysis_fps": round(FPS / stride, 1), "reid": use_reid},
+            jobs,
+        )
 
     except Exception as e:
         jobs.update(job_id, {

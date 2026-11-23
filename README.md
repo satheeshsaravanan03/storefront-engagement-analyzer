@@ -67,6 +67,17 @@ This branch (`feature/attention-reid`) turns CrowdVision into an exhibition tool
 | Face match / possible / margin | 0.45 / 0.363 / 0.05 | `backend/faces.py` |
 | Smallest usable face | 28 px (60 px or more works well) | `backend/faces.py` |
 
+### Mall places mode (shop entries from one fixed camera)
+
+Pick **Mall places** on the upload page instead of **Stand attention**. Use a video from a fixed camera that sees the floor and the shop doors, and mark each shop once on a frame: two clicks for the **door line** on the floor, one click for the **inside pin** (the shaded area toward it is what counts as the shop), and optionally the **floor area in front**. Points can be dragged, undone and zoomed into with a magnifier. On the results page **Adjust marks** applies new marks in seconds without analysing the video again. The result is, per shop, who entered, exited, peeked in, stopped in front or passed by, plus who visited more than one shop and in what order.
+
+- Only the **feet** of each tracked person are tested against the marks (a body in front of a shop covers its pixels without being in it). Hidden feet are estimated from the head.
+- No face matching or snapshots in this mode. Outputs per job: `annotated.mp4` (people, feet and events; the page draws the shops over it, where they can be switched off), `place_events.csv`, `place_metrics.json`, `identity.json`, `tracks.json`.
+- **Visitor ids.** The tracker's id is only a temporary label. Every person gets one visitor number (V001, V002, ...) for the whole video: a person the tracker loses and finds again, or comes back out of the same shop door, is joined from **shirt and trousers colour** (never the face), where they were heading and how long they were out of sight (`memory_sec`, 8 s by default). A join is made only when it is clear; when two answers are close the pieces stay apart and the visitor is marked **uncertain**, because a wrong merge is worse than a missed one. The Visitors card shows each person's colours and why joins were made; `identity.json` keeps the evidence of every join. Where two or more people overlapped and the tracker swapped them, the swap is undone only when everyone involved can be judged and another pairing is clearly better. Measured results and limits are in [docs/mall-places-plan.md](docs/mall-places-plan.md).
+- It needs a lot more compute than stand mode. Measured on an i5-10500 CPU with the defaults (`yolov8m`, 1280 px, 12 analysed frames per second), a video took 8 to 14 times its own length (a 22 s clip took 186 s on an idle machine and 310 s on a busy one). `model`, `imgsz` and `analysis_fps` can be lowered in the job config to trade accuracy for speed.
+- Plan, definitions and accuracy approach: [docs/mall-places-plan.md](docs/mall-places-plan.md).
+- Tests: `cd backend`, `pip install -r requirements-dev.txt`, then `python -m pytest`.
+
 ---
 
 ## 🖥️ Setup on a New Machine (Windows)

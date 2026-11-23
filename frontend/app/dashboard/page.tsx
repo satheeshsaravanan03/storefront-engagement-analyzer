@@ -5,71 +5,21 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, Play, AlertTriangle, CheckCircle2,
   Loader2, Sliders, X, Download, Zap, Film,
-  ChevronDown, Plus,
+  ChevronDown, Plus, Eye, Store,
 } from 'lucide-react';
-import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisResult } from '@/lib/api';
+import { uploadVideo, streamJobUpdates, checkBackendHealth, type AnalysisMode, type AnalysisResult, type Place } from '@/lib/api';
 import { SummaryCards, UploadedVideo, ViewersTable } from '@/components/EngagementResults';
 import { MatchedLeads } from '@/components/MatchedLeads';
+import { PlaceMarker, draftsReady, newDraft, toPlaces, type PlaceDraft } from '@/components/PlaceMarker';
+import { AnnotatedVideo } from '@/components/AnnotatedVideo';
+import { PlaceMarks } from '@/components/PlaceMarks';
+import { fitRect } from '@/lib/fit';
+import { PlaceResults } from '@/components/PlaceResults';
 import { AppShell } from '@/components/AppShell';
 import clsx from 'clsx';
 
-/* ── Inline video player with error handling ─────────────────
-   The annotated MP4 is served from FastAPI at localhost:8000.
-   We handle load errors gracefully with a fallback UI.
-   ─────────────────────────────────────────────────────────── */
-function VideoPlayerInline({ src }: { src: string }) {
-  const [error, setError] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Reset state when src changes
-  useEffect(() => { setError(false); setLoaded(false); }, [src]);
-
-  return (
-    <div className="relative bg-black" style={{ aspectRatio: '16/9' }}>
-      {!loaded && !error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-cv-surface">
-          <div className="text-center">
-            <Loader2 size={28} className="text-cv-accent animate-spin mx-auto mb-2" />
-            <p className="text-cv-sub text-xs font-mono">Loading annotated video...</p>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-cv-surface gap-3 p-6">
-          <AlertTriangle size={28} className="text-cv-amber" />
-          <p className="text-cv-text font-semibold text-sm">Video preview unavailable</p>
-          <p className="text-cv-sub text-xs text-center font-mono max-w-xs">
-            The video file exists on the backend. Use the Open/Download button below to view it directly.
-          </p>
-          <a href={src} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 bg-cv-accent text-white text-xs font-semibold px-4 py-2 rounded-xl">
-            <Play size={12} fill="currentColor" /> Open in new tab
-          </a>
-        </div>
-      )}
-
-      <video
-        ref={videoRef}
-        src={src}
-        controls
-        autoPlay
-        loop
-        muted
-        playsInline
-        className="w-full h-full object-contain"
-        style={{ display: error ? 'none' : 'block' }}
-        onLoadedData={() => setLoaded(true)}
-        onError={() => setError(true)}
-      />
-    </div>
-  );
-}
-
-
 /* ── Local preview of the chosen file, before upload ───────── */
-function VideoPreview({ file }: { file: File }) {
+function VideoPreview({ file, hint }: { file: File; hint: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -93,9 +43,7 @@ function VideoPreview({ file }: { file: File }) {
           </div>
         )}
       </div>
-      <p className="px-4 py-2 text-cv-sub text-xs font-mono border-t border-cv-border">
-        Preview. Best results: camera at the display, facing the people who approach.
-      </p>
+      <p className="px-4 py-2 text-cv-sub text-xs font-mono border-t border-cv-border">{hint}</p>
     </div>
   );
 }
@@ -114,6 +62,10 @@ const PRESETS: { name: string; values: Settings }[] = [
 const DEFAULT_SETTINGS = PRESETS.find(p => p.name === 'Balanced')!.values;
 const sameSettings = (a: Settings, b: Settings) =>
   (Object.keys(a) as (keyof Settings)[]).every(k => a[k] === b[k]);
+
+// Mall places: how long inside counts as entered, and how long standing in front counts as stopped
+type PlaceSettings = { stay_sec: number; stop_sec: number };
+const DEFAULT_PLACE_SETTINGS: PlaceSettings = { stay_sec: 2.5, stop_sec: 3 };
 
 const LEVEL_COLORS = ['#E4E6F0', '#C9CCF7', '#8F8AF0', '#4F46E5', '#2E2A86'];
 
@@ -222,12 +174,59 @@ function SettingsPanel({ config, onChange, onPreset }: {
   );
 }
 
+function PlaceSettingsPanel({ config, onChange }: {
+  config: PlaceSettings;
+  onChange: (k: keyof PlaceSettings, v: number) => void;
+}) {
+  return (
+    <div className="glow-border bg-cv-card p-6 space-y-6">
+      <div className="flex items-center gap-2.5">
+        <Sliders size={16} className="text-cv-accent" />
+        <span className="font-semibold text-cv-text text-lg">Mall settings</span>
+      </div>
+      <SettingSlider label="Inside to count as entered" unit="s" min={0.5} max={10} step={0.5} value={config.stay_sec}
+        hint="Stepping in and straight back out sooner than this is a peek, not an entry. Going out of view inside also counts."
+        onChange={v => onChange('stay_sec', v)} />
+      <SettingSlider label="Standing in front to count as stopped" unit="s" min={1} max={30} step={0.5} value={config.stop_sec}
+        hint="Time standing nearly still in the front area. Needs a front area marked for the shop."
+        onChange={v => onChange('stop_sec', v)} />
+      <p className="text-cv-sub text-xs leading-relaxed">
+        People are detected and tracked automatically. Only their feet are checked against the marks you draw.
+      </p>
+    </div>
+  );
+}
+
+/* Which kind of analysis: attention at one display, or movement in and out of several shops. */
+function ModeSwitch({ mode, onChange }: { mode: AnalysisMode; onChange: (m: AnalysisMode) => void }) {
+  const opts: { id: AnalysisMode; icon: typeof Eye; title: string; text: string }[] = [
+    { id: 'stand',  icon: Eye,   title: 'Stand attention', text: 'Who looked at one display, and for how long' },
+    { id: 'places', icon: Store, title: 'Mall places',     text: 'Who went into, left or stopped at each shop' },
+  ];
+  return (
+    <div className="grid sm:grid-cols-2 gap-3">
+      {opts.map(({ id, icon: Icon, title, text }) => (
+        <button key={id} onClick={() => onChange(id)} aria-pressed={mode === id}
+          className={clsx('text-left rounded-2xl border p-4 transition-colors flex items-start gap-3',
+            mode === id ? 'bg-cv-accent/[0.06] border-cv-accent' : 'bg-cv-card border-cv-border hover:border-cv-accent/40')}>
+          <Icon size={18} className={clsx('mt-0.5 flex-shrink-0', mode === id ? 'text-cv-accent' : 'text-cv-sub')} />
+          <span>
+            <span className="block font-semibold text-cv-text">{title}</span>
+            <span className="block text-cv-sub text-sm mt-0.5">{text}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ── Start button, shown right under the video preview ───── */
-function StartButton({ onStart, canStart, starting, backendOnline }: {
+function StartButton({ onStart, canStart, starting, backendOnline, note }: {
   onStart: () => void;
   canStart: boolean;
   starting: boolean;
   backendOnline: boolean | null;
+  note?: string;   // shown instead of "Ready" while something is still missing
 }) {
   return (
     <div>
@@ -241,14 +240,14 @@ function StartButton({ onStart, canStart, starting, backendOnline }: {
       </button>
       <p className={clsx('text-center text-sm mt-2.5', backendOnline === false ? 'text-cv-red' : 'text-cv-sub')}>
         {backendOnline === false ? 'Backend offline. Run: uvicorn main:app --port 8000'
-          : 'Ready. The analysis runs on the backend.'}
+          : note ?? 'Ready. The analysis runs on the backend.'}
       </p>
     </div>
   );
 }
 
 /* ── Drag-and-drop upload zone ────────────────────────────── */
-function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?: boolean }) {
+function UploadZone({ onFile, disabled, note }: { onFile: (f: File) => void; disabled?: boolean; note: string }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -290,20 +289,27 @@ function UploadZone({ onFile, disabled }: { onFile: (f: File) => void; disabled?
           ))}
           <span className="text-cv-sub text-sm ml-1">Up to 500 MB</span>
         </div>
-        <p className="text-cv-sub text-sm">Prerecorded footage from a camera placed at the display</p>
+        <p className="text-cv-sub text-sm">{note}</p>
       </div>
     </div>
   );
 }
 
 /* ── Explainer cards under the drop zone ──────────────────── */
-function HowItWorks() {
-  const steps = [
-    ['01', 'Detect people',                 'YOLOv8 pose finds every person in each frame.'],
-    ['02', 'Track each visitor',            'ByteTrack IDs keep one identity per person across frames.'],
-    ['03', 'Check who faces the display',   'Head and body pose decide whether someone is looking.'],
-    ['04', 'Measure attention time',        'Look duration is grouped into the levels you set.'],
-  ];
+const STAND_STEPS = [
+  ['01', 'Detect people',                 'YOLOv8 pose finds every person in each frame.'],
+  ['02', 'Track each visitor',            'ByteTrack IDs keep one identity per person across frames.'],
+  ['03', 'Check who faces the display',   'Head and body pose decide whether someone is looking.'],
+  ['04', 'Measure attention time',        'Look duration is grouped into the levels you set.'],
+];
+const PLACES_STEPS = [
+  ['01', 'Mark the shops',           'Draw a door line on the floor for each shop and click which side is inside.'],
+  ['02', 'Track everyone',           'Every person gets an ID that follows them through the video.'],
+  ['03', 'Watch the feet',           'Only the feet are checked against your marks, so a body in front of a shop does not count as inside.'],
+  ['04', 'Count entries and visits', 'Who entered, left or stopped at each shop, and who went into more than one.'],
+];
+
+function HowItWorks({ steps }: { steps: string[][] }) {
   return (
     <div className="glow-border bg-cv-card p-6">
       <p className="font-semibold text-cv-text text-lg mb-4">How the analysis works</p>
@@ -320,14 +326,23 @@ function HowItWorks() {
   );
 }
 
-function TipsAccordion() {
-  const tips = [
-    'Mount the camera at the display, at head height, facing visitors',
-    'People far away or turned away are not counted',
-    'Keep videos under 100 MB for fast processing',
-    'Set the thresholds before uploading; they apply to the whole analysis',
-    'Every analysis is saved on the Jobs page',
-  ];
+const STAND_TIPS = [
+  'Mount the camera at the display, at head height, facing visitors',
+  'People far away or turned away are not counted',
+  'Keep videos under 100 MB for fast processing',
+  'Set the thresholds before uploading; they apply to the whole analysis',
+  'Every analysis is saved on the Jobs page',
+];
+const PLACES_TIPS = [
+  'Use a fixed camera, high up, that sees the floor and every shop door; a moving camera breaks the marks',
+  'Draw the door line on the floor where the shop meets the walkway, not on the shop window',
+  'Click inside the shop to say which side is in; check the IN arrow points into the shop',
+  'Mark a front area too, to count people who stop at a shop without going in',
+  'Mall videos take longer to analyse than stand videos: people are small and the whole frame is searched',
+  'Every analysis is saved on the Jobs page',
+];
+
+function TipsAccordion({ tips }: { tips: string[] }) {
   return (
     <details className="glow-border bg-cv-card group">
       <summary className="flex items-center justify-between px-6 py-5 cursor-pointer select-none list-none">
@@ -347,9 +362,26 @@ function TipsAccordion() {
 }
 
 /* ── Live preview frame ───────────────────────────────────── */
-function LivePreview({ result }: { result: AnalysisResult }) {
+function LivePreview({ result, marks }: { result: AnalysisResult; marks?: Place[] }) {
   const fd = result.frame_data;
+  const places = result.mode === 'places';
   const pct = Math.round(result.progress ?? 0);
+
+  // Mall frames are shown whole and in their own shape, with the shops drawn over the picture by the page (as on the
+  // finished video). The marks are placed on the picture itself, so they hold for a video of any shape.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [shape, setShape] = useState<{ w: number; h: number } | null>(null);   // size of the preview picture
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);       // size of the box it is shown in
+  const hasFrame = !!result.preview_frame;
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasFrame]);
+  const natural = places && !!shape;
+  const fit = marks && box && shape ? fitRect(box, shape) : null;
 
   return (
     <div className="space-y-4">
@@ -378,20 +410,35 @@ function LivePreview({ result }: { result: AnalysisResult }) {
         </div>
         <div className="flex justify-between mt-1.5 text-[11px] text-cv-sub font-mono">
           <span>{(result.fps ?? 0).toFixed(1)} FPS processing</span>
-          <span>{pct < 100 ? 'Running pose detection + ByteTrack...' : 'Finalising...'}</span>
+          <span>
+            {pct >= 100 ? 'Finalising...'
+              : places ? `${result.phase ?? 'tracking people'}...`.replace(/^./, c => c.toUpperCase())
+              : 'Running pose detection + ByteTrack...'}
+          </span>
         </div>
       </div>
 
       {/* Live annotated frame streamed from the backend */}
       {result.preview_frame ? (
-        <div className="relative rounded-2xl overflow-hidden border border-cv-border bg-black">
+        <div ref={boxRef} className="relative rounded-2xl overflow-hidden border border-cv-border bg-black"
+          style={natural ? { aspectRatio: `${shape!.w} / ${shape!.h}` } : undefined}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`data:image/jpeg;base64,${result.preview_frame}`}
             alt="Live pipeline preview"
-            className="w-full object-cover"
-            style={{ aspectRatio: '16/9' }}
+            className={places ? 'w-full h-full object-contain' : 'w-full object-cover'}
+            style={places ? undefined : { aspectRatio: '16/9' }}
+            onLoad={e => {
+              const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+              setShape(prev => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+            }}
           />
+          {marks && fit && (
+            <svg viewBox={`0 0 ${fit.w} ${fit.h}`}
+              style={{ position: 'absolute', left: fit.x, top: fit.y, width: fit.w, height: fit.h, pointerEvents: 'none' }}>
+              <PlaceMarks marks={marks} width={fit.w} height={fit.h} unit={1} />
+            </svg>
+          )}
           <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/75 backdrop-blur-sm px-3 py-1.5 rounded-lg">
             <div className="w-2 h-2 bg-cv-green rounded-full animate-pulse" />
             <span className="text-cv-green font-mono text-[11px] font-bold">LIVE PREVIEW</span>
@@ -416,13 +463,17 @@ function LivePreview({ result }: { result: AnalysisResult }) {
 
       {/* Live counters under the preview */}
       {fd && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: 'Video time',       value: `${fd.time_sec.toFixed(1)}s`,   color: 'text-cv-cyan'   },
-            { label: 'Looking now',      value: fd.looking_now,                 color: 'text-cv-accent' },
-            { label: 'Viewers so far',   value: fd.viewers,                     color: 'text-cv-text'   },
-            { label: 'Engaged / strong', value: `${fd.engaged} / ${fd.strong}`, color: 'text-cv-amber'  },
-          ].map(({ label, value, color }) => (
+        <div className={clsx('grid grid-cols-2 gap-3', places ? 'md:grid-cols-3' : 'md:grid-cols-4')}>
+          {(places ? [
+            { label: 'Video time',           value: `${fd.time_sec.toFixed(1)}s`,       color: 'text-cv-cyan'   },
+            { label: 'People in view',       value: fd.people_now ?? 0,                 color: 'text-cv-accent' },
+            { label: 'Tracks so far',        value: fd.tracks ?? 0,                     color: 'text-cv-text'   },
+          ] : [
+            { label: 'Video time',       value: `${fd.time_sec.toFixed(1)}s`,                  color: 'text-cv-cyan'   },
+            { label: 'Looking now',      value: fd.looking_now ?? 0,                           color: 'text-cv-accent' },
+            { label: 'Viewers so far',   value: fd.viewers ?? 0,                               color: 'text-cv-text'   },
+            { label: 'Engaged / strong', value: `${fd.engaged ?? 0} / ${fd.strong ?? 0}`,      color: 'text-cv-amber'  },
+          ]).map(({ label, value, color }) => (
             <div key={label} className="glow-border bg-cv-card rounded-2xl p-4">
               <p className={clsx('font-display text-2xl', color)}>{value}</p>
               <p className="text-cv-sub text-xs font-mono mt-1">{label}</p>
@@ -458,13 +509,33 @@ function ThresholdValues({ glanceSec, engageSec, strongSec }: {
   );
 }
 
+/* Mall places settings used for this analysis (read-only) */
+function PlaceSettingsUsed({ staySec, stopSec }: { staySec: number; stopSec: number }) {
+  return (
+    <div className="glow-border bg-cv-card rounded-2xl p-5 space-y-3">
+      <p className="text-xs font-mono text-cv-sub tracking-wider">SETTINGS USED</p>
+      {[
+        ['Entered after', staySec],
+        ['Stopped after', stopSec],
+      ].map(([label, v]) => (
+        <div key={label} className="flex items-center justify-between text-sm text-cv-sub">
+          {label}
+          <span className="font-mono text-cv-text">{v} s</span>
+        </div>
+      ))}
+      <p className="text-cv-sub text-[11px]">To try other values, set them before uploading and run the analysis again.</p>
+    </div>
+  );
+}
+
 /* ── Full results panel (shown after processing completes) ─── */
-function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
+function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec, onChanged }: {
   result: AnalysisResult;
   jobId: string;
   glanceSec: number;
   engageSec: number;
   strongSec: number;
+  onChanged: (updated: AnalysisResult) => void;
 }) {
   const stats = result.stats;
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -488,50 +559,33 @@ function ResultsPanel({ result, jobId, glanceSec, engageSec, strongSec }: {
         </a>
       </motion.div>
 
-      {/* Annotated video player — inline on the website */}
-      {result.annotated_video_url && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          className="glow-border bg-cv-card rounded-2xl overflow-hidden"
-        >
-          <div className="px-5 py-3 border-b border-cv-border flex items-center gap-2">
-            <Film size={15} className="text-cv-accent" />
-            <span className="font-semibold text-cv-text text-sm">Annotated Output Video</span>
-            <span className="text-cv-sub text-xs font-mono ml-auto">
-              Boxes · Track IDs · Live attention time
-            </span>
-          </div>
+      <AnnotatedVideo result={result} />
 
-          <VideoPlayerInline src={result.annotated_video_url} />
-
-          <div className="px-5 py-3 flex items-center justify-between border-t border-cv-border">
-            <span className="text-cv-sub text-xs font-mono">
-              {stats?.source_fps?.toFixed(1)} FPS · {stats?.resolution} · {stats?.total_frames} frames
-            </span>
-            <a href={result.annotated_video_url}
-              target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-cv-accent hover:text-cv-accentL text-xs font-mono transition-colors">
-              <Download size={12} /> Open / Download MP4
-            </a>
-          </div>
+      {result.mode === 'places' && result.places_result ? (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+          <PlaceResults result={result.places_result} stats={stats} eventsUrl={result.events_url}
+            jobId={jobId} canAdjust={result.can_adjust} onChanged={onChanged} />
         </motion.div>
+      ) : (
+        <>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+            <MatchedLeads jobId={jobId} />
+          </motion.div>
+
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+            <ViewersTable
+              viewers={result.viewers ?? []}
+              glanceSec={glanceSec}
+              engageSec={engageSec}
+              strongSec={strongSec}
+              csvUrl={result.viewers_url}
+              jsonUrl={result.engaged_json_url}
+              imageBase={`${BACKEND}/api/file/${jobId}/`}
+              jobId={jobId}
+            />
+          </motion.div>
+        </>
       )}
-
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-        <MatchedLeads jobId={jobId} />
-      </motion.div>
-
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-        <ViewersTable
-          viewers={result.viewers ?? []}
-          glanceSec={glanceSec}
-          engageSec={engageSec}
-          strongSec={strongSec}
-          csvUrl={result.viewers_url}
-          jsonUrl={result.engaged_json_url}
-          imageBase={`${BACKEND}/api/file/${jobId}/`}
-          jobId={jobId}
-        />
-      </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
         <UploadedVideo jobId={jobId} filename={result.filename} />
@@ -549,6 +603,9 @@ export default function DashboardPage() {
   const [error, setError]             = useState<string | null>(null);
   const [backendOnline, setBackend]   = useState<boolean | null>(null);
   const [config, setConfig]           = useState<Settings>(DEFAULT_SETTINGS);
+  const [mode, setMode]               = useState<AnalysisMode>('stand');
+  const [drafts, setDrafts]           = useState<PlaceDraft[]>(() => [newDraft([])]);
+  const [placeConfig, setPlaceConfig] = useState<PlaceSettings>(DEFAULT_PLACE_SETTINGS);
   const stopStream = useRef<(()=>void)|null>(null);
 
   useEffect(() => { checkBackendHealth().then(setBackend); }, []);
@@ -566,13 +623,16 @@ export default function DashboardPage() {
 
   const handleFile = useCallback((f: File) => {
     setFile(f); setResult(null); setState('idle'); setError(null);
+    setDrafts([newDraft([])]);   // marks belong to one frame of one video
   }, []);
 
   const handleStart = async () => {
     if (!file) return;
     setState('uploading'); setError(null);
     try {
-      const { job_id } = await uploadVideo(file, config);
+      const { job_id } = await uploadVideo(file, mode === 'places'
+        ? { mode, places: toPlaces(drafts), ...placeConfig }
+        : config);
       setJobId(job_id); setState('processing');
       stopStream.current = streamJobUpdates(
         job_id,
@@ -590,9 +650,12 @@ export default function DashboardPage() {
     stopStream.current?.();
     setFile(null); setJobId(null); setResult(null);
     setState('idle'); setError(null);
+    setDrafts([newDraft([])]);
   };
 
-  const canStart = !!file && !!backendOnline && state !== 'uploading';
+  const places = mode === 'places';   // the mode switch is hidden once a video is processing, so this is the job's mode too
+  const marksReady = draftsReady(drafts);
+  const canStart = !!file && !!backendOnline && state !== 'uploading' && (!places || marksReady);
   const showSettings = state === 'idle' || state === 'uploading' || state === 'error';
   const eyebrow = { idle: 'NEW ANALYSIS', uploading: 'NEW ANALYSIS', processing: 'IN PROGRESS', done: 'RESULTS', error: 'NEW ANALYSIS' }[state];
 
@@ -606,15 +669,19 @@ export default function DashboardPage() {
             <h1 className="font-display text-4xl text-cv-text mb-2">
               {state === 'done' ? 'Analysis complete' :
                state === 'processing' ? 'Processing...' :
-               'Visitor attention analysis'}
+               places ? 'Mall place analysis' : 'Visitor attention analysis'}
             </h1>
             <p className="text-cv-sub max-w-2xl">
               {state === 'idle'       && (file
-                ? 'Check the preview, adjust the settings if needed, then analyse the video.'
-                : 'Upload a prerecorded video from a camera at your product or advertisement to see who looked at it, and for how long.')}
+                ? (places ? 'Mark the shops on a frame, adjust the settings if needed, then analyse the video.'
+                          : 'Check the preview, adjust the settings if needed, then analyse the video.')
+                : (places ? 'Upload a prerecorded video from a fixed mall camera, mark the shops once, and see who went into, left or stopped at each one.'
+                          : 'Upload a prerecorded video from a camera at your product or advertisement to see who looked at it, and for how long.'))}
               {state === 'uploading'  && 'Uploading your video to the backend...'}
-              {state === 'processing' && 'Pose detection + ByteTrack running frame by frame. Preview updates live.'}
-              {state === 'done'       && 'Viewers, attention times, behaviour, the annotated video and CSV are ready below.'}
+              {state === 'processing' && (places ? 'Detecting and tracking people frame by frame. Preview updates live.'
+                                                  : 'Pose detection + ByteTrack running frame by frame. Preview updates live.')}
+              {state === 'done'       && (places ? 'Entries, exits, stops, the order of visits, the annotated video and CSV are ready below.'
+                                                  : 'Viewers, attention times, behaviour, the annotated video and CSV are ready below.')}
               {state === 'error'      && 'Something went wrong. See error details below.'}
             </p>
           </div>
@@ -632,11 +699,15 @@ export default function DashboardPage() {
             {/* Upload / preview */}
             {(state === 'idle' || state === 'uploading' || state === 'error') && (
               <div className="space-y-5">
+                {state !== 'uploading' && <ModeSwitch mode={mode} onChange={setMode} />}
+
                 {!file && (
                   <>
-                    <UploadZone onFile={handleFile} disabled={state === 'uploading'} />
-                    <HowItWorks />
-                    <TipsAccordion />
+                    <UploadZone onFile={handleFile} disabled={state === 'uploading'}
+                      note={places ? 'Prerecorded footage from a fixed camera that sees the shop doors'
+                                   : 'Prerecorded footage from a camera placed at the display'} />
+                    <HowItWorks steps={places ? PLACES_STEPS : STAND_STEPS} />
+                    <TipsAccordion tips={places ? PLACES_TIPS : STAND_TIPS} />
                   </>
                 )}
 
@@ -655,9 +726,12 @@ export default function DashboardPage() {
                       <button onClick={handleReset} title="Remove video" className="text-cv-sub hover:text-cv-red transition-colors"><X size={17} /></button>
                     </div>
 
-                    <VideoPreview file={file} />
+                    {places
+                      ? <PlaceMarker key={`${file.name}-${file.size}-${file.lastModified}`} source={file} drafts={drafts} onChange={setDrafts} />
+                      : <VideoPreview file={file} hint="Preview. Best results: camera at the display, facing the people who approach." />}
                     <StartButton onStart={handleStart} canStart={canStart}
-                      starting={state === 'uploading'} backendOnline={backendOnline} />
+                      starting={state === 'uploading'} backendOnline={backendOnline}
+                      note={places && !marksReady ? 'Mark a door line and the inside for every shop, with a different name each, to continue.' : undefined} />
                   </>
                 )}
               </div>
@@ -667,7 +741,7 @@ export default function DashboardPage() {
             <AnimatePresence>
               {state === 'processing' && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <LivePreview result={result ?? {} as AnalysisResult} />
+                  <LivePreview result={result ?? {} as AnalysisResult} marks={places ? toPlaces(drafts) : undefined} />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -679,6 +753,7 @@ export default function DashboardPage() {
                   <ResultsPanel
                     result={result} jobId={jobId}
                     glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
+                    onChanged={setResult}
                   />
                 </motion.div>
               )}
@@ -698,15 +773,20 @@ export default function DashboardPage() {
 
           {/* Right column: settings before analysis, thresholds + analytics after */}
           <div className={clsx('space-y-4 min-w-0', state === 'done' && 'xl:sticky xl:top-6 xl:self-start xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:p-1 xl:-m-1')}>
-            {showSettings && (
-              <SettingsPanel config={config} onChange={setSetting} onPreset={setConfig} />
+            {showSettings && (places
+              ? <PlaceSettingsPanel config={placeConfig} onChange={(k, v) => setPlaceConfig(p => ({ ...p, [k]: v }))} />
+              : <SettingsPanel config={config} onChange={setSetting} onPreset={setConfig} />
             )}
 
-            {state === 'processing' && (
-              <ThresholdValues glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec} />
+            {state === 'processing' && (places
+              ? <PlaceSettingsUsed staySec={placeConfig.stay_sec} stopSec={placeConfig.stop_sec} />
+              : <ThresholdValues glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec} />
             )}
 
-            {state === 'done' && result && (
+            {state === 'done' && result && (places ? (
+              <PlaceSettingsUsed staySec={result.stats?.stay_sec ?? placeConfig.stay_sec}
+                stopSec={result.stats?.stop_sec ?? placeConfig.stop_sec} />
+            ) : (
               <>
                 <ThresholdValues
                   glanceSec={config.glance_sec} engageSec={config.engage_sec} strongSec={config.strong_sec}
@@ -719,7 +799,7 @@ export default function DashboardPage() {
                   ignored={result.stats?.ignored ?? 0}
                 />
               </>
-            )}
+            ))}
           </div>
         </div>
       </div>

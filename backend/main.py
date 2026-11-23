@@ -49,9 +49,12 @@ def _load_env_file():
 _load_env_file()
 
 # Import the processing pipeline
-from processor import process_video_job, JobStore
+from identity import MEMORY_SEC
+from processor import (process_video_job, process_places_job, analyze_places_job, load_tracks, read_setting,
+                       JobStore, STAY_SEC, STOP_SEC)
 import faces
 import meta
+import places
 import serp
 
 # ── App setup ─────────────────────────────────────────────────
@@ -77,7 +80,7 @@ OUTPUT_BASE = Path(os.environ.get("OUTPUT_DIR", "/tmp/crowdvision_output"))
 OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
 
 # Fields kept in <job_dir>/job.json so past jobs survive a restart
-_PERSIST_SKIP = {"preview_frame", "frame_data"}
+_PERSIST_SKIP = {"preview_frame", "frame_data", "recomputing"}
 
 
 def _save_job(job_id: str):
@@ -149,6 +152,16 @@ async def analyze_video(
         cfg = json.loads(config)
     except Exception:
         cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    # Mall places mode: the marked shops are checked before anything is saved
+    mode = "places" if cfg.get("mode") == "places" else "stand"
+    if mode == "places":
+        try:
+            cfg["places"] = places.parse_places(cfg.get("places"))
+        except ValueError as e:
+            raise HTTPException(400, detail=str(e))
 
     # Create job
     job_id = str(uuid.uuid4())[:8]
@@ -166,6 +179,7 @@ async def analyze_video(
     # Initialise job record
     jobs.create(job_id, {
         "status": "queued",
+        "mode": mode,
         "progress": 0,
         "total_frames": 0,
         "processed_frames": 0,
@@ -187,18 +201,20 @@ async def analyze_video(
 async def run_processing(job_id: str, video_path: str, job_dir: Path, config: dict):
     """Run the CV pipeline in a background task."""
     loop = asyncio.get_event_loop()
+    places_mode = config.get("mode") == "places"
     try:
         await loop.run_in_executor(
             None,
-            process_video_job,
+            process_places_job if places_mode else process_video_job,
             job_id, video_path, str(job_dir), config, jobs
         )
     except Exception as e:
         jobs.update(job_id, {"status": "error", "error": str(e)})
     else:
-        # Match the captured faces against the registry; never let this fail the job
+        # Match the captured faces against the registry; never let this fail the job.
+        # Mall places jobs save no face snapshots, so there is nothing to match.
         try:
-            if (jobs.get(job_id) or {}).get("status") == "done":
+            if not places_mode and (jobs.get(job_id) or {}).get("status") == "done":
                 await loop.run_in_executor(None, faces.identify_job, job_dir)
         except Exception as e:
             print(f"[faces] matching failed for {job_id}: {e}")
@@ -215,6 +231,7 @@ async def list_jobs():
         rows.append({
             "job_id":       job_id,
             "filename":     job.get("filename", "video"),
+            "mode":         job.get("mode", "stand"),
             "created_at":   job.get("created_at", 0),
             "status":       job.get("status", "queued"),
             "progress":     job.get("progress", 0),
@@ -223,6 +240,7 @@ async def list_jobs():
             "viewers":      len(viewers),
             "engaged":      sum(1 for v in viewers if v.get("behaviour") == "engaged"),
             "strong":       sum(1 for v in viewers if v.get("behaviour") == "strong"),
+            "entered":      stats.get("entered"),
             "error":        job.get("error"),
         })
     rows.sort(key=lambda r: r["created_at"], reverse=True)
@@ -235,7 +253,7 @@ async def delete_job(job_id: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
-    if job.get("status") in ("queued", "processing"):
+    if job.get("status") in ("queued", "processing") or job.get("recomputing"):
         raise HTTPException(409, detail="Job is still processing")
     job_dir = Path(job["job_dir"]).resolve()
     if OUTPUT_BASE.resolve() in job_dir.parents:
@@ -377,6 +395,58 @@ async def get_identities(job_id: str):
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
+class PlacesUpdate(BaseModel):
+    places: list
+    stay_sec: Optional[float] = None
+    stop_sec: Optional[float] = None
+
+
+@app.post("/api/jobs/{job_id}/recompute")
+async def recompute_places(job_id: str, body: PlacesUpdate):
+    """
+    Apply new shop marks to a finished mall places job. The tracked people saved with the job are analysed
+    again and the result files and annotated video are rewritten; nobody is detected a second time.
+    """
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job not found")
+    if job.get("mode") != "places":
+        raise HTTPException(400, detail="Only mall places jobs have shops to adjust")
+    if job.get("status") != "done" or job.get("recomputing"):
+        raise HTTPException(409, detail="The job is busy")
+    job_dir = Path(job["job_dir"])
+    if not (job_dir / "tracks.json").is_file():
+        raise HTTPException(409, detail="This job was analysed before marks could be adjusted. Upload the video again.")
+    try:
+        shops = places.parse_places(body.places)
+        stats = job.get("stats") or {}
+        asked = {"stay_sec": body.stay_sec if body.stay_sec is not None else stats.get("stay_sec", STAY_SEC[0]),
+                 "stop_sec": body.stop_sec if body.stop_sec is not None else stats.get("stop_sec", STOP_SEC[0])}
+        stay = read_setting(asked, "stay_sec", *STAY_SEC)
+        stop = read_setting(asked, "stop_sec", *STOP_SEC)
+        memory = read_setting({"memory_sec": stats.get("memory_sec", MEMORY_SEC[0])}, "memory_sec", *MEMORY_SEC)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+
+    settings = json.loads((job_dir / "place_metrics.json").read_text(encoding="utf-8")).get("settings", {})
+    jobs.update(job_id, {"recomputing": True})
+    loop = asyncio.get_event_loop()
+
+    def run():   # the saved tracks are read here, off the event loop: for a long video the file is large
+        analyze_places_job(job_id, job["video_path"], str(job_dir), shops, load_tracks(str(job_dir)),
+                           stay, stop, memory, settings, stats, jobs)
+
+    try:
+        await loop.run_in_executor(None, run)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Could not apply the new marks: {e}")
+    finally:
+        jobs.update(job_id, {"recomputing": False, "phase": "", "progress": 100})   # also after a failure: the old result stands
+    jobs.update(job_id, {"config": {**(job.get("config") or {}), "places": shops, "stay_sec": stay, "stop_sec": stop}})
+    _save_job(job_id)
+    return _build_response(job_id, jobs.get(job_id))
+
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
     """Get current job status (poll endpoint)."""
@@ -397,7 +467,7 @@ async def stream_status(job_id: str):
         raise HTTPException(404, detail="Job not found")
 
     async def event_generator():
-        last_frame = -1
+        last_seen = None
         timeout_start = time.time()
         max_wait = 600  # 10 minutes max
 
@@ -406,12 +476,13 @@ async def stream_status(job_id: str):
             if not job:
                 break
 
-            current_frame = job.get("processed_frames", 0)
+            # the frame, the progress and the phase: mall places jobs keep working after the last frame
+            current = (job.get("processed_frames", 0), job.get("progress", 0), job.get("phase"))
             status = job.get("status", "queued")
 
-            # Send update if frame changed OR status changed
-            if current_frame != last_frame or status in ("done", "error"):
-                last_frame = current_frame
+            # Send update if anything the client shows changed OR status changed
+            if current != last_seen or status in ("done", "error"):
+                last_seen = current
                 data = json.dumps(_build_response(job_id, job))
                 yield f"data: {data}\n\n"
                 timeout_start = time.time()  # reset timeout
@@ -464,7 +535,7 @@ async def download_file(job_id: str, file_type: str, request: Request):
         "video":    (job_dir / "annotated.mp4",  "video/mp4"),
         "original": (original, {".webm": "video/webm", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
                                 ".avi": "video/x-msvideo"}.get(original.suffix.lower(), "video/mp4")),
-        "csv":      (job_dir / "viewers.csv",      "text/csv"),
+        "csv":      (job_dir / ("place_events.csv" if job.get("mode") == "places" else "viewers.csv"), "text/csv"),
     }
     item = file_map.get(file_type)
     if not item:
@@ -528,7 +599,7 @@ async def get_named_file(job_id: str, filename: str):
         raise HTTPException(404, detail="Job not found")
     job_dir = Path(job["job_dir"]).resolve()
     path = (job_dir / filename).resolve()
-    if job_dir not in path.parents or not path.is_file():  # stay inside the job folder
+    if job_dir not in path.parents or not path.is_file() or path.name == "tracks.json":  # stay inside the job folder
         raise HTTPException(404, detail="File not found")
     return FileResponse(str(path))
 
@@ -543,6 +614,7 @@ def _build_response(job_id: str, job: dict) -> dict:
     resp = {
         "job_id":            job_id,
         "status":            job.get("status", "queued"),
+        "phase":             job.get("phase"),
         "progress":          job.get("progress", 0),
         "total_frames":      job.get("total_frames", 0),
         "processed_frames":  job.get("processed_frames", 0),
@@ -552,15 +624,24 @@ def _build_response(job_id: str, job: dict) -> dict:
         "error":             job.get("error"),
         "filename":          job.get("filename"),
         "created_at":        job.get("created_at"),
+        "mode":              job.get("mode", "stand"),
     }
 
     if job.get("status") == "done":
         resp["stats"]  = job.get("stats")
-        resp["viewers"] = job.get("viewers")
         resp["annotated_video_url"] = f"{be_url}/api/download/{job_id}/video"
-        resp["viewers_url"]         = f"{be_url}/api/file/{job_id}/viewers.csv"
-        if (job_dir / "captures" / "engaged.json").exists():
-            resp["engaged_json_url"] = f"{be_url}/api/file/{job_id}/captures/engaged.json"
+        video = job_dir / "annotated.mp4"
+        if video.is_file():   # changes whenever the video is written again (new marks), so a browser never plays the old copy
+            resp["annotated_video_url"] += f"?v={video.stat().st_mtime_ns}"
+        if resp["mode"] == "places":
+            resp["places_result"] = job.get("places_result")
+            resp["events_url"]    = f"{be_url}/api/file/{job_id}/place_events.csv"
+            resp["can_adjust"]    = (job_dir / "tracks.json").is_file()   # jobs from before marks could be adjusted have none
+        else:
+            resp["viewers"] = job.get("viewers")
+            resp["viewers_url"] = f"{be_url}/api/file/{job_id}/viewers.csv"
+            if (job_dir / "captures" / "engaged.json").exists():
+                resp["engaged_json_url"] = f"{be_url}/api/file/{job_id}/captures/engaged.json"
 
     return resp
 
@@ -568,7 +649,7 @@ def _build_response(job_id: str, job: dict) -> dict:
 def _build_zip(job_id: str, job_dir: Path, video_name: str):
     """Create a ZIP of all result files."""
     zip_path = job_dir / "results.zip"
-    files_to_include = ["annotated.mp4", "viewers.csv"]
+    files_to_include = ["annotated.mp4", "viewers.csv", "place_events.csv", "place_metrics.json", "identity.json"]
     cap_dir = job_dir / "captures"
     if cap_dir.is_dir():
         files_to_include += [f"captures/{f.name}" for f in sorted(cap_dir.iterdir()) if f.is_file()]
